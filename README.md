@@ -1,7 +1,9 @@
 
-MacOS 语音输入工具，按下快捷键说话，松开即输入。
+MacOS语音输入工具，实时识别、大模型文本优化、全本地存储，Typeless平替
 
-**[下载 Type4Me v1.0.0](https://github.com/joewongjc/type4me/releases/download/v1.0.0/Type4Me-v1.0.0.dmg)** (macOS 14+)
+<img width="420" height="78" alt="image" src="https://github.com/user-attachments/assets/dbc676e0-6128-4bed-89a2-553d2d1a197c" />
+
+https://github.com/user-attachments/assets/eff0ed4b-f31a-41a0-8a1b-09e800cb2657
 
 ## 为什么做 Type4Me
 市面上语音输入法，至少命中以下问题之一：贵（$12/月）、封闭（不可导出记录）、扩展性差（不能自定义Prompt）、慢。
