@@ -105,6 +105,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        // Start periodic update checking
+        UpdateChecker.shared.startPeriodicChecking(appState: appState)
+
         // Register per-mode hotkeys
         registerHotkeys()
 

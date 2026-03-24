@@ -36,6 +36,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
 
+    @Environment(AppState.self) private var appState
     @State private var selectedTab: SettingsTab = .general
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
 
@@ -91,16 +92,25 @@ struct SettingsView: View {
 
     private func navItem(_ tab: SettingsTab) -> some View {
         let isActive = selectedTab == tab
+        let showBadge = tab == .about && appState.hasUnseenUpdate
         return Button {
             selectedTab = tab
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(tab.displayName)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(isActive ? .white : TF.settingsText)
-                Text(tab.subtitle)
-                    .font(.system(size: 10))
-                    .foregroundStyle(isActive ? .white.opacity(0.7) : TF.settingsTextTertiary)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(tab.displayName)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(isActive ? .white : TF.settingsText)
+                    Text(tab.subtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(isActive ? .white.opacity(0.7) : TF.settingsTextTertiary)
+                }
+                Spacer()
+                if showBadge {
+                    Circle()
+                        .fill(.red)
+                        .frame(width: 7, height: 7)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)

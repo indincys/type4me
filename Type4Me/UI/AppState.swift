@@ -209,6 +209,13 @@ final class AppState {
     @ObservationIgnored var onShowPanel: (() -> Void)?
     @ObservationIgnored var onHidePanel: (() -> Void)?
 
+    // MARK: Update Check
+
+    var availableUpdates: [UpdateInfo] = []
+    var hasUnseenUpdate: Bool = false
+    var isCheckingUpdate: Bool = false
+    var lastUpdateCheck: Date? = nil
+
     // MARK: Setup
 
     var hasCompletedSetup: Bool {
