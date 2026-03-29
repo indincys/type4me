@@ -679,6 +679,15 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                     guard downloadingModel == model else { return }
                     downloadingModel = nil
                     refreshModelStatus()
+                    // Auto-download Silero VAD when downloading SenseVoice
+                    if model == .senseVoiceSmall {
+                        let vadType = ModelManager.AuxModelType.sileroVad
+                        if !ModelManager.shared.isModelAvailable(vadType) {
+                            Task {
+                                try? await ModelManager.shared.downloadModel(vadType) { _ in }
+                            }
+                        }
+                    }
                     // Auto-select if first download
                     if modelDownloadStatus.values.filter({ $0 }).count == 1 {
                         selectedStreamingModel = model

@@ -21,10 +21,9 @@ enum SherpaASRError: Error, LocalizedError {
     }
 }
 
-/// Local streaming speech recognizer using SherpaOnnx.
+/// Local streaming speech recognizer using SherpaOnnx (Paraformer architecture).
 ///
-/// Supports both Paraformer (encoder+decoder) and Zipformer CTC (single model)
-/// architectures, selected via `ModelManager.selectedStreamingModel`.
+/// SenseVoice models are handled by `SenseVoiceASRClient` instead.
 actor SherpaASRClient: SpeechRecognizer {
 
     private let logger = Logger(
@@ -166,37 +165,18 @@ actor SherpaASRClient: SpeechRecognizer {
         let selectedModel = ModelManager.selectedStreamingModel
         let tokensPath = (modelDir as NSString).appendingPathComponent("tokens.txt")
 
-        let modelConfig: SherpaOnnxOnlineModelConfig
-
-        switch selectedModel.architecture {
-        case .ctc:
-            let ctcConfig = sherpaOnnxOnlineZipformer2CtcModelConfig(
-                model: (modelDir as NSString).appendingPathComponent(selectedModel.modelFileName)
-            )
-            modelConfig = sherpaOnnxOnlineModelConfig(
-                tokens: tokensPath,
-                zipformer2Ctc: ctcConfig,
-                numThreads: 2,
-                provider: "cpu",
-                debug: 0,
-                modelType: "zipformer2"
-            )
-        case .paraformer:
-            let paraConfig = sherpaOnnxOnlineParaformerModelConfig(
-                encoder: (modelDir as NSString).appendingPathComponent("encoder.int8.onnx"),
-                decoder: (modelDir as NSString).appendingPathComponent("decoder.int8.onnx")
-            )
-            modelConfig = sherpaOnnxOnlineModelConfig(
-                tokens: tokensPath,
-                paraformer: paraConfig,
-                numThreads: 2,
-                provider: "cpu",
-                debug: 0,
-                modelType: "paraformer"
-            )
-        case .senseVoice:
-            fatalError("SenseVoice uses offline recognition — should not reach SherpaASRClient streaming path")
-        }
+        let paraConfig = sherpaOnnxOnlineParaformerModelConfig(
+            encoder: (modelDir as NSString).appendingPathComponent("encoder.int8.onnx"),
+            decoder: (modelDir as NSString).appendingPathComponent("decoder.int8.onnx")
+        )
+        let modelConfig = sherpaOnnxOnlineModelConfig(
+            tokens: tokensPath,
+            paraformer: paraConfig,
+            numThreads: 2,
+            provider: "cpu",
+            debug: 0,
+            modelType: "paraformer"
+        )
 
         let featConfig = sherpaOnnxFeatureConfig(sampleRate: 16000, featureDim: 80)
         return sherpaOnnxOnlineRecognizerConfig(

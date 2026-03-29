@@ -26,7 +26,6 @@ actor ModelManager {
 
     enum ModelArchitecture: String, Sendable {
         case paraformer
-        case ctc
         case senseVoice
     }
 
