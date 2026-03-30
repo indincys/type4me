@@ -364,6 +364,7 @@ actor ModelManager {
                 } catch {
                     let partialDir = (modelsDir as NSString).appendingPathComponent(key)
                     try? FileManager.default.removeItem(atPath: partialDir)
+                    try? FileManager.default.removeItem(at: tempFile)
                     throw error
                 }
                 try? FileManager.default.removeItem(at: tempFile)
