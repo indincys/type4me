@@ -450,7 +450,7 @@ actor ModelManager {
                 // Success — clear resume data
                 resumeData[key] = nil
 
-                guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                guard let http = response as? HTTPURLResponse, (http.statusCode == 200 || http.statusCode == 206) else {
                     throw ModelError.downloadFailed(url)
                 }
 
