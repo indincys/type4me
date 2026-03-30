@@ -549,7 +549,10 @@ actor RecognitionSession {
             }
 
             state = .injecting
-            injectionEngine.preserveClipboard = UserDefaults.standard.bool(forKey: "tf_preserveClipboard")
+            let defaults = UserDefaults.standard
+            injectionEngine.preserveClipboard = defaults.object(forKey: "tf_preserveClipboard") != nil
+                ? defaults.bool(forKey: "tf_preserveClipboard")
+                : true
 
             let injectionOutcome: InjectionOutcome
             if injectionAborted {
