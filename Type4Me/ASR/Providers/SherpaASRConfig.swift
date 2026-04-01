@@ -46,4 +46,18 @@ struct SherpaASRConfig: ASRProviderConfig, Sendable {
         )
     }
 
+    /// Path to the SenseVoice model directory.
+    var senseVoiceModelDir: String {
+        (modelDir as NSString).appendingPathComponent(
+            ModelManager.StreamingModel.senseVoiceSmall.directoryName
+        )
+    }
+
+    /// Path to the Silero VAD model directory.
+    var vadModelDir: String {
+        (modelDir as NSString).appendingPathComponent(
+            ModelManager.AuxModelType.sileroVad.directoryName
+        )
+    }
+
 }

@@ -82,11 +82,13 @@ actor ModelManager {
     enum AuxModelType: String, CaseIterable, Sendable {
         case offlineParaformer = "offline-paraformer"
         case punctuation       = "punctuation"
+        case sileroVad         = "silero-vad"
 
         var displayName: String {
             switch self {
             case .offlineParaformer: return L("离线识别模型", "Offline ASR")
             case .punctuation:       return L("标点恢复模型", "Punctuation")
+            case .sileroVad:         return L("语音检测模型", "Voice Detection")
             }
         }
 
@@ -94,6 +96,7 @@ actor ModelManager {
             switch self {
             case .offlineParaformer: return "sherpa-onnx-paraformer-zh-2023-09-14"
             case .punctuation:       return "sherpa-onnx-punct-ct-transformer-zh-en-vocab272727-2024-04-12"
+            case .sileroVad:         return "silero_vad"
             }
         }
 
@@ -103,16 +106,24 @@ actor ModelManager {
                 return URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/" + directoryName + ".tar.bz2")!
             case .punctuation:
                 return URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/" + directoryName + ".tar.bz2")!
+            case .sileroVad:
+                return URL(string: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx")!
             }
         }
 
         /// Whether this model is a single file download (not a tar.bz2 archive).
-        var isSingleFile: Bool { false }
+        var isSingleFile: Bool {
+            switch self {
+            case .sileroVad: return true
+            default: return false
+            }
+        }
 
         var requiredFiles: [String] {
             switch self {
             case .offlineParaformer: return ["model.int8.onnx", "tokens.txt"]
             case .punctuation:       return ["model.onnx"]
+            case .sileroVad:         return ["silero_vad.onnx"]
             }
         }
 
@@ -120,6 +131,7 @@ actor ModelManager {
             switch self {
             case .offlineParaformer: return 700
             case .punctuation:       return 72
+            case .sileroVad:         return 2
             }
         }
     }
