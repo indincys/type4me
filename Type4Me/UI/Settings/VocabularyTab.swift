@@ -15,7 +15,8 @@ struct VocabularyTab: View {
     @State private var newTriggerTexts: [String: String] = [:]
     @State private var newTrigger: String = ""
     @State private var newValue: String = ""
-    @State private var builtinSnippetCount: Int = SnippetStorage.builtinCount()
+    @State private var showBulkSnippetsSheet = false
+    @State private var bulkSnippetsText = ""
 
     // Smart Correction
     @State private var showSmartCorrection = false
@@ -121,45 +122,6 @@ struct VocabularyTab: View {
             .font(.system(size: 11))
             .padding(.bottom, 12)
 
-            // Built-in snippets info bar
-            HStack(spacing: 6) {
-                Image(systemName: "tray.full.fill")
-                    .font(.system(size: 9))
-                    .foregroundStyle(TF.settingsTextTertiary)
-                Text(L("内置 \(builtinSnippetCount) 条纠正规则",
-                       "\(builtinSnippetCount) built-in correction rules"))
-                    .font(.system(size: 11))
-                    .foregroundStyle(TF.settingsTextTertiary)
-
-                Divider().frame(height: 12)
-
-                Button {
-                    SnippetStorage.revealBuiltinInFinder()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "folder")
-                            .font(.system(size: 10))
-                        Text(L("在 Finder 中打开", "Reveal in Finder"))
-                            .font(.system(size: 11))
-                    }
-                    .foregroundStyle(TF.settingsAccentBlue)
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    builtinSnippetCount = SnippetStorage.builtinCount()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 10))
-                        .foregroundStyle(TF.settingsAccentBlue)
-                }
-                .buttonStyle(.plain)
-                .help(L("重新加载内置文件", "Reload built-in file"))
-
-                Spacer()
-            }
-            .padding(.bottom, 8)
-
             // Existing user snippets (grouped by replacement)
             ForEach(Array(displaySnippets.enumerated()), id: \.element.id) { index, group in
                 if index > 0 {
@@ -230,10 +192,22 @@ struct VocabularyTab: View {
             }
             .padding(.top, 8)
 
-            Text(L("示例: \"hello@example.com\" ← \"我的邮箱\"", "Example: \"hello@example.com\" ← \"my email\""))
-                .font(.system(size: 10))
-                .foregroundStyle(TF.settingsTextTertiary)
-                .padding(.top, 6)
+            HStack(spacing: 8) {
+                Text(L("示例: \"hello@example.com\" ← \"我的邮箱\"", "Example: \"hello@example.com\" ← \"my email\""))
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                Spacer()
+                Button {
+                    showBulkSnippetsSheet = true
+                } label: {
+                    Label(L("批量编辑", "Bulk Edit"), systemImage: "list.bullet.rectangle")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(TF.settingsAccentBlue)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 6)
 
             Spacer()
         }
@@ -241,18 +215,22 @@ struct VocabularyTab: View {
             SmartCorrectionSheet {
                 snippets = SnippetStorage.load()
                 hotwords = HotwordStorage.load()
-                builtinSnippetCount = SnippetStorage.builtinCount()
             }
         }
         .onAppear {
             hotwords = HotwordStorage.load()
             snippets = SnippetStorage.load()
-            builtinSnippetCount = SnippetStorage.builtinCount()
         }
         .sheet(isPresented: $showBulkHotwordsSheet) {
             bulkHotwordsSheet
                 .onAppear {
                     bulkHotwordsText = hotwords.joined(separator: "\n")
+                }
+        }
+        .sheet(isPresented: $showBulkSnippetsSheet) {
+            bulkSnippetsSheet
+                .onAppear {
+                    bulkSnippetsText = snippetsToBulkText(snippets)
                 }
         }
     }
@@ -608,6 +586,123 @@ struct VocabularyTab: View {
         hotwords = newWords
         HotwordStorage.save(newWords)
         showBulkHotwordsSheet = false
+    }
+
+    // MARK: - Bulk Snippets Sheet
+
+    private func snippetsToBulkText(_ snippets: [(trigger: String, value: String)]) -> String {
+        // Group by replacement value, then format: "replacement, trigger1, trigger2"
+        var groups: [(value: String, triggers: [String])] = []
+        var valueIndex: [String: Int] = [:]
+        for snippet in snippets {
+            if let idx = valueIndex[snippet.value] {
+                groups[idx].triggers.append(snippet.trigger)
+            } else {
+                valueIndex[snippet.value] = groups.count
+                groups.append((value: snippet.value, triggers: [snippet.trigger]))
+            }
+        }
+        return groups.map { group in
+            ([group.value] + group.triggers).joined(separator: ", ")
+        }.joined(separator: "\n")
+    }
+
+    private func bulkTextToSnippets(_ text: String) -> [(trigger: String, value: String)] {
+        text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .flatMap { line -> [(trigger: String, value: String)] in
+                let parts = line.components(separatedBy: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+                    .filter { !$0.isEmpty }
+                guard parts.count >= 2 else { return [] }
+                let value = parts[0]
+                return parts.dropFirst().map { (trigger: $0, value: value) }
+            }
+    }
+
+    private var bulkSnippetsLineCount: Int {
+        bulkSnippetsText
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .count
+    }
+
+    private var bulkSnippetsSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text(L("批量编辑片段替换", "Bulk Edit Snippets"))
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(TF.settingsText)
+                Spacer()
+                Button {
+                    showBulkSnippetsSheet = false
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 18))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Text(L("每行一组: 替换词, 触发词1, 触发词2, ...", "One group per line: replacement, trigger1, trigger2, ..."))
+                .font(.system(size: 12))
+                .foregroundStyle(TF.settingsTextTertiary)
+
+            TextEditor(text: $bulkSnippetsText)
+                .font(.system(size: 13))
+                .foregroundStyle(TF.settingsText)
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsBg))
+                .frame(minHeight: 300, maxHeight: 400)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
+                )
+
+            HStack {
+                Text(L("\(bulkSnippetsLineCount) 组替换规则", "\(bulkSnippetsLineCount) replacement groups"))
+                    .font(.system(size: 11))
+                    .foregroundStyle(TF.settingsTextTertiary)
+                Spacer()
+            }
+
+            HStack(spacing: 12) {
+                Spacer()
+                Button {
+                    showBulkSnippetsSheet = false
+                } label: {
+                    Text(L("取消", "Cancel"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsTextSecondary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    let parsed = bulkTextToSnippets(bulkSnippetsText)
+                    snippets = parsed
+                    SnippetStorage.save(parsed)
+                    showBulkSnippetsSheet = false
+                } label: {
+                    Text(L("保存", "Save"))
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 7)
+                        .background(RoundedRectangle(cornerRadius: 8).fill(TF.settingsAccentAmber))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .background(TF.settingsCardAlt)
     }
 
 }

@@ -208,11 +208,8 @@ enum SnippetStorage {
     private static let migratedKey = "tf_snippets_migrated_to_file_v2"
     private static let oldUDKey = "tf_snippets"
 
-    /// Syncs built-in file with code defaults and migrates old UserDefaults data.
+    /// Migrates old UserDefaults snippets to user file (one-time).
     static func migrateIfNeeded() {
-        // Always sync built-in file with code defaults (picks up new entries on app update)
-        saveBuiltin(defaultSnippets)
-
         guard !UserDefaults.standard.bool(forKey: migratedKey) else { return }
         defer { UserDefaults.standard.set(true, forKey: migratedKey) }
 
@@ -227,13 +224,8 @@ enum SnippetStorage {
             return (trigger: pair[0], value: pair[1])
         }
 
-        // Filter out entries that duplicate built-in
-        func norm(_ s: String) -> String { s.filter { !$0.isWhitespace }.lowercased() }
-        let builtinKeys = Set(defaultSnippets.map { "\(norm($0.trigger))\t\($0.value)" })
-        let userOnly = oldSnippets.filter { !builtinKeys.contains("\(norm($0.trigger))\t\($0.value)") }
-
-        if !userOnly.isEmpty {
-            save(userOnly)
+        if !oldSnippets.isEmpty {
+            save(oldSnippets)
         }
     }
 
@@ -304,11 +296,7 @@ enum SnippetStorage {
 
     private static func compiledRules() -> [CompiledRule] {
         if let cached = cacheLock.withLock({ $0 }) { return cached }
-        let builtinSnippets = loadBuiltin()
-        let userSnippets = load()
-        let userTriggers = Set(userSnippets.map { $0.trigger.lowercased() })
-        let effectiveBuiltin = builtinSnippets.filter { !userTriggers.contains($0.trigger.lowercased()) }
-        let allSnippets = effectiveBuiltin + userSnippets
+        let allSnippets = load()
 
         let rules = allSnippets.compactMap { snippet -> CompiledRule? in
             let pattern = buildFlexPattern(snippet.trigger)
