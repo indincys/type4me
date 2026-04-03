@@ -103,6 +103,29 @@ actor HistoryStore {
         return records
     }
 
+    /// Fetch recent records with non-empty rawText for smart correction UI.
+    func recentForCorrection(limit: Int = 20) -> [(id: String, date: Date, rawText: String)] {
+        let sql = """
+        SELECT id, created_at, raw_text FROM recognition_history
+        WHERE raw_text != '' AND status = 'completed'
+        ORDER BY created_at DESC LIMIT \(limit);
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+
+        let iso = ISO8601DateFormatter()
+        var results: [(id: String, date: Date, rawText: String)] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            results.append((
+                id: column(stmt, 0),
+                date: iso.date(from: column(stmt, 1)) ?? Date(),
+                rawText: column(stmt, 2)
+            ))
+        }
+        return results
+    }
+
     func count(from start: Date? = nil, to end: Date? = nil) -> Int {
         var sql = "SELECT COUNT(*) FROM recognition_history"
         let iso = ISO8601DateFormatter()
