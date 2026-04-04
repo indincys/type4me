@@ -72,6 +72,11 @@ struct SettingsView: View {
                 selectedTab = .general
             }
         }
+        .onChange(of: editionRaw) { _, _ in
+            if selectedTab == .models && edition == .member {
+                selectedTab = .general
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToMode)) { note in
             selectedTab = .modes
             if let modeId = note.object as? UUID {

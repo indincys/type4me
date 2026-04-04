@@ -320,9 +320,9 @@ final class AppState {
         set { UserDefaults.standard.set(newValue, forKey: "tf_hasCompletedSetup") }
     }
 
+    /// Read-only; use AppEditionMigration.switchTo() to change edition.
     var appEdition: AppEdition? {
-        get { AppEditionMigration.current }
-        set { AppEditionMigration.current = newValue }
+        AppEditionMigration.current
     }
 
     init() {
