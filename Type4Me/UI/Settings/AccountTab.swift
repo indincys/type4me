@@ -224,9 +224,6 @@ struct AccountTab: View, SettingsCardHelpers {
                 try await auth.registerAnonymous(username: anonUsername, password: anonPassword)
             } catch CloudAPIError.usernameTaken {
                 anonError = L("用户名已被占用", "Username already exists")
-            } catch CloudAPIError.deviceLimit {
-                anonError = CloudAPIError.deviceLimit.localizedDescription
-                anonIsLogin = true
             } catch {
                 anonError = error.localizedDescription
             }

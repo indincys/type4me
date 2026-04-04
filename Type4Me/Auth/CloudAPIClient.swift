@@ -6,7 +6,6 @@ enum CloudAPIError: Error, LocalizedError {
     case tokenExpired
     case invalidCredentials
     case usernameTaken
-    case deviceLimit
     case serverError(String)
     case networkError(Error)
 
@@ -16,7 +15,6 @@ enum CloudAPIError: Error, LocalizedError {
         case .tokenExpired: return L("登录已过期，请重新登录", "Session expired, please log in again")
         case .invalidCredentials: return L("用户名或密码错误", "Invalid username or password")
         case .usernameTaken: return L("用户名已被占用", "Username already exists")
-        case .deviceLimit: return L("该设备已有匿名账户，请点击「已有账户」登录", "This device already has an anonymous account. Use \"Log in\" instead.")
         case .serverError(let msg): return msg
         case .networkError(let err): return err.localizedDescription
         }
@@ -72,13 +70,6 @@ final class CloudAPIClient {
 
         if http.statusCode == 401 {
             try await handleUnauthorized(data)
-        }
-
-        if http.statusCode == 403 {
-            if let errBody = try? JSONDecoder().decode(ErrorResponse.self, from: data),
-               errBody.error == "device_limit" {
-                throw CloudAPIError.deviceLimit
-            }
         }
 
         if http.statusCode == 409 {
