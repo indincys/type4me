@@ -62,7 +62,7 @@ actor BailianASRClient: SpeechRecognizer {
         eventContinuation = continuation
         _events = stream
 
-        var request = URLRequest(url: BailianProtocol.endpoint)
+        var request = URLRequest(url: BailianProtocol.endpoint(for: bailianConfig))
         request.setValue("Bearer \(bailianConfig.apiKey)", forHTTPHeaderField: "Authorization")
 
         let taskID = UUID().uuidString.lowercased()

@@ -40,12 +40,21 @@ struct BailianASRConfig: ASRProviderConfig, Sendable {
             isOptional: true,
             defaultValue: ""
         ),
+        CredentialField(
+            key: "baseURL",
+            label: "Base URL",
+            placeholder: "wss://dashscope.aliyuncs.com/api-ws/v1/inference",
+            isSecure: false,
+            isOptional: true,
+            defaultValue: ""
+        ),
     ]}
 
     let apiKey: String
     let model: String
     let languageHint: String
     let vocabularyId: String
+    let baseURL: String
 
     init?(credentials: [String: String]) {
         guard let apiKey = Self.sanitized(credentials["apiKey"]),
@@ -58,6 +67,7 @@ struct BailianASRConfig: ASRProviderConfig, Sendable {
         let rawLanguageHint = Self.sanitized(credentials["languageHint"])?.lowercased() ?? ""
         self.languageHint = Self.supportedLanguageHints.contains(rawLanguageHint) ? rawLanguageHint : ""
         self.vocabularyId = Self.sanitized(credentials["vocabularyId"]) ?? ""
+        self.baseURL = Self.sanitized(credentials["baseURL"]) ?? ""
     }
 
     func toCredentials() -> [String: String] {
@@ -66,6 +76,7 @@ struct BailianASRConfig: ASRProviderConfig, Sendable {
             "model": model,
             "languageHint": languageHint,
             "vocabularyId": vocabularyId,
+            "baseURL": baseURL,
         ]
     }
 
