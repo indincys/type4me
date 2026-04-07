@@ -9,11 +9,17 @@ enum SettingsTab: String, CaseIterable, Identifiable {
     case modes
     case history
     case about
+    case account
 
     var id: String { rawValue }
 
-    static var visibleTabs: [SettingsTab] {
-        allCases
+    static func tabs(for edition: AppEdition?) -> [SettingsTab] {
+        switch edition {
+        case .member:
+            return [.general, .modes, .vocabulary, .history, .about]
+        case .byoKey, .none:
+            return allCases.map { $0 }
+        }
     }
 
     var displayName: String {
@@ -24,6 +30,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .modes:       return L("模式", "Modes")
         case .history:     return L("历史", "History")
         case .about:       return L("关于", "About")
+        case .account:     return L("账户", "Account")
         }
     }
 
@@ -35,6 +42,7 @@ enum SettingsTab: String, CaseIterable, Identifiable {
         case .modes:       return L("推理与默认行为", "Processing & defaults")
         case .history:     return L("会话与日志保留", "Sessions & logs")
         case .about:       return L("版本、许可证与支持", "Version, license & support")
+        case .account:     return L("登录与订阅管理", "Login & subscription")
         }
     }
 }
@@ -45,7 +53,13 @@ struct SettingsView: View {
 
     @Environment(AppState.self) private var appState
     @State private var selectedTab: SettingsTab = .general
+    @State private var showDeviceConflict = false
     @AppStorage("tf_language") private var language = AppLanguage.systemDefault
+    @AppStorage("tf_app_edition") private var editionRaw: String?
+
+    private var edition: AppEdition? {
+        editionRaw.flatMap { AppEdition(rawValue: $0) }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -57,11 +71,41 @@ struct SettingsView: View {
         .frame(minWidth: 700, minHeight: 480)
         .background(TF.settingsBg)
         .preferredColorScheme(.light)
+        .onAppear {
+            if (selectedTab == .models && edition == .member) ||
+               (selectedTab == .account && edition != .member) {
+                selectedTab = .general
+            }
+        }
+        .onChange(of: editionRaw) { _, _ in
+            if (selectedTab == .models && edition == .member) ||
+               (selectedTab == .account && edition != .member) {
+                selectedTab = .general
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .navigateToMode)) { note in
             selectedTab = .modes
             if let modeId = note.object as? UUID {
                 NotificationCenter.default.post(name: .selectMode, object: modeId)
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .cloudDeviceConflict)) { _ in
+            showDeviceConflict = true
+        }
+        .alert(
+            L("设备冲突", "Device Conflict"),
+            isPresented: $showDeviceConflict
+        ) {
+            Button("OK") {
+                if edition == .member {
+                    selectedTab = .account
+                }
+            }
+        } message: {
+            Text(L(
+                "你的账户已在其他设备登录，当前设备已自动登出。",
+                "Your account has been logged in on another device. This device has been signed out."
+            ))
         }
     }
 
@@ -85,13 +129,24 @@ struct SettingsView: View {
 
             // Nav items
             VStack(spacing: 2) {
-                ForEach(SettingsTab.visibleTabs) { tab in
+                ForEach(SettingsTab.tabs(for: edition)) { tab in
                     navItem(tab)
                 }
             }
             .padding(.horizontal, 10)
 
             Spacer()
+
+            // Account tab - only for Member edition
+            if edition == .member {
+                navItem(.account)
+                    .padding(.horizontal, 10)
+            }
+
+            // Edition switch link
+            EditionSwitchLink()
+                .padding(.horizontal, 10)
+                .padding(.bottom, 12)
         }
         .frame(width: 180)
         .background(TF.settingsBg)
@@ -139,11 +194,16 @@ struct SettingsView: View {
     private var content: some View {
         ZStack {
             tabPage(.general)    { GeneralSettingsTab() }
-            tabPage(.models)     { ModelSettingsTab() }
+            if edition != .member {
+                tabPage(.models) { ModelSettingsTab() }
+            }
             tabPage(.vocabulary) { VocabularyTab() }
             tabPage(.modes)      { ModesSettingsTab() }
             fixedPage(.history)  { HistoryTab(isActive: selectedTab == .history) }
             tabPage(.about)      { AboutTab() }
+            if edition == .member {
+                tabPage(.account) { AccountTab() }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(TF.settingsCard)
@@ -151,12 +211,14 @@ struct SettingsView: View {
 
     /// Scrollable tab page (most tabs).
     private func tabPage<V: View>(_ tab: SettingsTab, @ViewBuilder content: () -> V) -> some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: true) {
             VStack(alignment: .leading, spacing: 0) {
                 content()
             }
             .padding(28)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .scrollBounceBehavior(.basedOnSize)
         .opacity(selectedTab == tab ? 1 : 0)
         .allowsHitTesting(selectedTab == tab)
     }
