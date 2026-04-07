@@ -56,12 +56,22 @@ actor VolcASRClient: SpeechRecognizer {
         self._events = stream
 
         let connectId = UUID().uuidString
+        let isCloudProxy = options.cloudProxyURL != nil
+        let targetURL: URL
+        if let proxyURLString = options.cloudProxyURL, let proxyURL = URL(string: proxyURLString) {
+            targetURL = proxyURL
+        } else {
+            targetURL = Self.endpoint
+        }
 
-        var request = URLRequest(url: Self.endpoint)
-        request.setValue(volcConfig.appKey, forHTTPHeaderField: "X-Api-App-Key")
-        request.setValue(volcConfig.accessKey, forHTTPHeaderField: "X-Api-Access-Key")
-        request.setValue(volcConfig.resourceId, forHTTPHeaderField: "X-Api-Resource-Id")
-        request.setValue(connectId, forHTTPHeaderField: "X-Api-Connect-Id")
+        var request = URLRequest(url: targetURL)
+        if !isCloudProxy {
+            // Direct connection: inject vendor credentials
+            request.setValue(volcConfig.appKey, forHTTPHeaderField: "X-Api-App-Key")
+            request.setValue(volcConfig.accessKey, forHTTPHeaderField: "X-Api-Access-Key")
+            request.setValue(volcConfig.resourceId, forHTTPHeaderField: "X-Api-Resource-Id")
+            request.setValue(connectId, forHTTPHeaderField: "X-Api-Connect-Id")
+        }
 
         let session = URLSession(configuration: options.urlSessionConfiguration)
         let task = session.webSocketTask(with: request)

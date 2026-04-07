@@ -55,7 +55,7 @@ actor SonioxASRClient: SpeechRecognizer {
         eventContinuation = continuation
         _events = stream
 
-        let url = try SonioxProtocol.buildWebSocketURL()
+        let url = try SonioxProtocol.buildWebSocketURL(override: options.cloudProxyURL)
         let session = URLSession(configuration: options.urlSessionConfiguration)
         let task = session.webSocketTask(with: url)
         task.resume()

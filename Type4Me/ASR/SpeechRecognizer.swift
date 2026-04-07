@@ -7,6 +7,9 @@ struct ASRRequestOptions: Sendable, Equatable {
     var boostingTableID: String?
     var contextHistoryLength: Int = 20
     var bypassProxy: Bool = false
+    /// When set, ASR clients connect to this URL instead of their default endpoint.
+    /// Used by CloudASRClient to route through the Type4Me Cloud proxy.
+    var cloudProxyURL: String?
     var urlSessionConfiguration: URLSessionConfiguration {
         let config = URLSessionConfiguration.default
         if bypassProxy {

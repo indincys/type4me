@@ -49,8 +49,12 @@ actor RecognitionSession {
         category: "RecognitionSession"
     )
 
+    /// Whether the active session is using the Cloud provider (ASR + LLM proxied).
+    private var isCloudMode: Bool { activeProvider == .cloud }
+
     /// Return the appropriate LLM client for the currently selected provider.
     private func currentLLMClient() -> any LLMClient {
+        if isCloudMode { return CloudLLMClient() }
         let provider = KeychainService.selectedLLMProvider
         if provider == .claude {
             return ClaudeChatClient()
@@ -58,9 +62,11 @@ actor RecognitionSession {
         return DoubaoChatClient(provider: provider)
     }
 
-    /// Load LLM credentials from KeychainService.
+    /// LLM config: Cloud mode uses a dummy config (CloudLLMClient ignores it);
+    /// BYOK mode loads real credentials from KeychainService.
     private func loadEffectiveLLMConfig() -> LLMConfig? {
-        KeychainService.loadLLMConfig()
+        if isCloudMode { return LLMConfig(apiKey: "", model: "cloud") }
+        return KeychainService.loadLLMConfig()
     }
 
     /// Pre-initialize audio subsystem so the first recording starts instantly.
@@ -143,6 +149,21 @@ actor RecognitionSession {
 
         let provider = KeychainService.selectedASRProvider
         activeProvider = provider
+
+        // Cloud quota gate: refuse to start if free quota is exhausted
+        if provider == .cloud {
+            let canUse = await CloudQuotaManager.shared.canUse()
+            if !canUse {
+                SoundFeedback.playError()
+                state = .idle
+                onASREvent?(.error(NSError(
+                    domain: "Type4Me", code: -10,
+                    userInfo: [NSLocalizedDescriptionKey: L("免费额度已用完", "Free quota exhausted")]
+                )))
+                onASREvent?(.completed)
+                return
+            }
+        }
 
         let effectiveMode = ASRProviderRegistry.resolvedMode(for: mode, provider: provider)
         sessionGeneration &+= 1
@@ -687,6 +708,11 @@ actor RecognitionSession {
                     engine.finishClipboardRestore()
                     continuation.resume(returning: outcome)
                 }
+            }
+
+            // Cloud quota: refresh from server after LLM completes
+            if isCloudMode {
+                await CloudQuotaManager.shared.refresh(force: true)
             }
 
             // Save to history
