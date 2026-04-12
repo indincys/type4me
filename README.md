@@ -33,27 +33,6 @@
 
 系统要求：macOS 14+ (Sonoma)
 
-**DMG提示无法打开、损坏、APP安装后打不开？**
-
-> 解决方案：  
->
-> - Step 1：打开「终端」，运行下列命令
->
->   xattr -d com.apple.quarantine /Applications/Type4Me.app
->
->   ```bash
->   spctl --master-disable
->   ```
->
-> - Step 2：打开「系统设置」，进入「隐私与安全性 - 允许以下来源的应用程序」，选择「任何来源」
->
-> - Step 3：打开DMG安装包，将Type4Me拖入Application文件夹后打开。
->
-> - Step 4（可选）：回到系统设置，把刚刚的「允许以下来源的应用程序」从任何来源改回去。
-
-> 因为目前还没有申请好Apple的开发者认证（努力申请中），这是正常提示，可通过配置解决。
-
-**方式二：复制本项目的链接丢给你的 Agent帮你部署**
 
 ## 界面预览
 
