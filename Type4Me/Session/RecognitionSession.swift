@@ -27,6 +27,19 @@ actor RecognitionSession {
 
     var canStartRecording: Bool { state == .idle }
 
+    /// Wait until the session reaches idle state, with a timeout.
+    /// Returns true if idle was reached, false on timeout.
+    func awaitIdle(timeout: Duration = .seconds(3)) async -> Bool {
+        if state == .idle { return true }
+        let deadline = ContinuousClock.now + timeout
+        while state != .idle {
+            let remaining = deadline - ContinuousClock.now
+            guard remaining > .zero else { return false }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return state == .idle
+    }
+
     /// Exposed for testing; production code should use startRecording / stopRecording.
     func setState(_ newState: SessionState) {
         state = newState
@@ -76,6 +89,46 @@ actor RecognitionSession {
     /// Pre-initialize audio subsystem so the first recording starts instantly.
     func warmUp() { audioEngine.warmUp() }
 
+    /// Pre-warm TCP connection to the ASR endpoint so the next WebSocket
+    /// connect skips the handshake. Called on app launch and after each recording.
+    nonisolated func warmUpASRConnection() {
+        Task.detached(priority: .utility) {
+            await self.pingASREndpoint()
+        }
+    }
+
+    private func pingASREndpoint() async {
+        let endpoint: String
+        #if HAS_CLOUD_SUBSCRIPTION
+        if KeychainService.selectedASRProvider == .cloud {
+            endpoint = CloudConfig.apiEndpoint + "/health"
+        } else {
+            endpoint = currentASREndpoint()
+        }
+        #else
+        endpoint = currentASREndpoint()
+        #endif
+        guard let url = URL(string: endpoint) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.timeoutInterval = 5
+        _ = try? await ASRRequestOptions.sharedSession.data(for: req)
+    }
+
+    private func currentASREndpoint() -> String {
+        let provider = KeychainService.selectedASRProvider
+        switch provider {
+        case .volcano:
+            return "https://openspeech.bytedance.com"
+        case .soniox:
+            return "https://stt-rt.soniox.com"
+        case .deepgram:
+            return "https://api.deepgram.com"
+        default:
+            return ""
+        }
+    }
+
     // MARK: - Mode & Timing
 
     private var currentMode: ProcessingMode = .direct
@@ -108,16 +161,34 @@ actor RecognitionSession {
 
     // MARK: - Accumulated text
 
+    private let maxRecordingDuration: TimeInterval = 600  // 10 minutes
+
     private var currentTranscript: RecognitionTranscript = .empty
     private var eventConsumptionTask: Task<Void, Never>?
+    private var maxDurationTask: Task<Void, Never>?
     private var hasEmittedReadyForCurrentSession = false
     private var audioChunkContinuation: AsyncStream<Data>.Continuation?
     private var audioChunkSenderTask: Task<Void, Never>?
     private var uploadFailureFlag: UploadFailureFlag?
 
+    /// Flipped to true when mic level exceeds threshold during recording.
+    /// When false at stop time, we skip the full ASR teardown (no speech = nothing to finalize).
+    private var speechDetected = false
+    private static let speechLevelThreshold: Float = 0.15
+
+    private func markSpeechDetected() {
+        if !speechDetected {
+            speechDetected = true
+        }
+    }
+
     // MARK: - Prompt context (selected text + clipboard captured at recording start)
 
     private var promptContext: PromptContext = PromptContext(selectedText: "", clipboardText: "")
+
+    /// Bundle identifier of the frontmost app when recording started.
+    /// Used to select app-specific snippet rules.
+    private var targetBundleId: String?
 
     // MARK: - Speculative LLM (fire during recording pauses)
 
@@ -130,6 +201,8 @@ actor RecognitionSession {
     private var injectionAborted = false
     /// Continuation resumed when a final (isFinal) transcript arrives during stop.
     private var finalTranscriptCont: CheckedContinuation<String?, Never>?
+    /// Continuation resumed when first non-empty streaming text arrives (for short-recording wait).
+    private var firstStreamingTextCont: CheckedContinuation<Bool, Never>?
 
     // MARK: - Toggle
 
@@ -158,6 +231,8 @@ actor RecognitionSession {
             await forceReset()
         }
 
+        stoppedByMaxDuration = false
+        targetBundleId = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let provider = KeychainService.selectedASRProvider
         activeProvider = provider
 
@@ -283,8 +358,15 @@ actor RecognitionSession {
 
         let audioBuffer = AudioChunkBuffer()
 
+        speechDetected = false
         let levelHandler = self.onAudioLevel
-        audioEngine.onAudioLevel = { level in
+        let speechGraceMs = SoundFeedback.startSoundDurationMs()
+        let speechGraceEnd = ContinuousClock.now + .milliseconds(speechGraceMs)
+        audioEngine.onAudioLevel = { [weak self] level in
+            if level > RecognitionSession.speechLevelThreshold,
+               ContinuousClock.now >= speechGraceEnd {
+                Task { await self?.markSpeechDetected() }
+            }
             levelHandler?(level)
         }
 
@@ -394,7 +476,26 @@ actor RecognitionSession {
             let client = currentLLMClient()
             Task { await client.warmUp(baseURL: llmConfig.baseURL) }
         }
+
+        // Safety: auto-stop after maxRecordingDuration to prevent unbounded memory use
+        maxDurationTask?.cancel()
+        maxDurationTask = Task { [weak self, maxRecordingDuration] in
+            try? await Task.sleep(for: .seconds(maxRecordingDuration))
+            guard let self, !Task.isCancelled else { return }
+            await self.autoStopIfRecording()
+        }
     }
+
+    /// Auto-stop triggered by max recording duration timer.
+    private func autoStopIfRecording() async {
+        guard state == .recording else { return }
+        DebugFileLogger.log("max recording duration reached (\(maxRecordingDuration)s), auto-stopping")
+        stoppedByMaxDuration = true
+        await stopRecording()
+    }
+
+    /// Whether the current session was auto-stopped by max duration limit.
+    private(set) var stoppedByMaxDuration = false
 
     /// Switch the processing mode before stopping. Used for cross-mode hotkey stops.
     func switchMode(to mode: ProcessingMode) {
@@ -430,6 +531,8 @@ actor RecognitionSession {
         // Set state BEFORE any await to prevent a second stop from
         // slipping through the guard during the suspension point.
         state = .finishing
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
 
         let stopT0 = ContinuousClock.now
         SystemVolumeManager.restore()
@@ -445,11 +548,95 @@ actor RecognitionSession {
             return
         }
 
+        // Quick bail: if mic level never exceeded speech threshold, skip the
+        // full ASR teardown (no speech = nothing to finalize). Saves 2-7s of waiting.
+        if !speechDetected {
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            DebugFileLogger.log("stop: no speech detected (duration=\(String(format: "%.1f", duration))s), fast exit")
+            if let client = asrClient {
+                await client.disconnect()
+                self.asrClient = nil
+            }
+            eventConsumptionTask?.cancel()
+            eventConsumptionTask = nil
+            onASREvent?(.processingResult(text: ""))
+            onASREvent?(.completed)
+            if sessionGeneration == myGeneration, state != .idle {
+                state = .idle
+                hasEmittedReadyForCurrentSession = false
+                currentTranscript = .empty
+                warmUpASRConnection()
+            }
+            resetSpeculativeLLM()
+            SystemVolumeManager.restore()
+            return
+        }
+
+        // Two-phase wait: for streaming providers with short recordings and no
+        // streaming text yet, wait briefly for ASR to respond before deciding to skip.
+        // Phase 1: wait up to 1s for any streaming partial text.
+        // Phase 2: if text arrives, endAudio + wait up to 1s for final result.
+        let provider = activeProvider
+        let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider).isStreaming
+        if providerIsStreaming {
+            let duration = recordingStartTime.map { Date().timeIntervalSince($0) } ?? 0
+            let hasStreamingText = !currentTranscript.composedText
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            if duration < 5 && !hasStreamingText {
+                // Phase 1: wait up to 1s for any streaming text
+                DebugFileLogger.log("stop: short recording (\(String(format: "%.1f", duration))s) with no streaming text, waiting for partial")
+                let gotText = await awaitFirstStreamingText(timeout: .seconds(1))
+
+                if !gotText {
+                    // No streaming text after 1s — likely not real speech, fast exit
+                    DebugFileLogger.log("stop: no streaming text after 1s wait, fast exit")
+                    if let client = asrClient {
+                        await client.disconnect()
+                        self.asrClient = nil
+                    }
+                    eventConsumptionTask?.cancel()
+                    eventConsumptionTask = nil
+                    onASREvent?(.processingResult(text: ""))
+                    onASREvent?(.completed)
+                    if sessionGeneration == myGeneration, state != .idle {
+                        state = .idle
+                        hasEmittedReadyForCurrentSession = false
+                        currentTranscript = .empty
+                        warmUpASRConnection()
+                    }
+                    resetSpeculativeLLM()
+                    SystemVolumeManager.restore()
+                    return
+                }
+
+                // Phase 2: streaming text arrived — endAudio + short wait for final
+                DebugFileLogger.log("stop: streaming text arrived, phase 2 teardown +\(ContinuousClock.now - stopT0)")
+                if let client = asrClient {
+                    _ = await withTimeout(.seconds(3)) {
+                        try await client.endAudio()
+                    }
+                    let finalResult = await awaitFinalTranscript(timeout: .seconds(1))
+                    DebugFileLogger.log("stop: phase 2 done, hasFinal=\(finalResult != nil) +\(ContinuousClock.now - stopT0)")
+
+                    // Drain events + disconnect in background so post-teardown can start
+                    let evtTask = eventConsumptionTask
+                    eventConsumptionTask = nil
+                    Task {
+                        if let evtTask { _ = await withTimeout(.seconds(3)) { await evtTask.value } }
+                        await client.disconnect()
+                        DebugFileLogger.log("stop: phase 2 background cleanup done")
+                    }
+                    self.asrClient = nil
+                }
+                // Fall through to post-teardown (LLM, inject, etc.)
+                // asrClient is nil → the normal teardown block below is skipped.
+            }
+        }
+
         // Keep speculative LLM task alive — we'll compare its input text
         // against the final ASR transcript after full teardown.
         cancelSpeculativeLLM()
         var needsLLM = !currentMode.prompt.isEmpty
-        let provider = activeProvider
 
         // Early label override for short text exemption (语音润色 only).
         // Use streaming transcript to update UI immediately, before ASR teardown,
@@ -468,7 +655,6 @@ actor RecognitionSession {
         // ASR teardown: send endAudio, then wait for the final transcript.
         // For streaming providers we wait for the precise isFinal signal rather than
         // draining the entire event stream, so we can fire LLM sooner.
-        let providerIsStreaming = ASRProviderRegistry.capabilities(for: provider).isStreaming
         var asrTeardownClean = true
         if let client = asrClient {
             let endAudioTimeout: Duration = providerIsStreaming ? .seconds(3) : .seconds(60)
@@ -520,7 +706,7 @@ actor RecognitionSession {
         if needsLLM && canEarlyLLM {
             var finalASRText = currentTranscript.composedText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            finalASRText = SnippetStorage.applyEffective(to: finalASRText)
+            finalASRText = SnippetStorage.applyEffective(to: finalASRText, bundleId: targetBundleId)
 
             // Short text exemption: skip LLM for short texts (语音润色 only)
             let exemptionThreshold = currentMode.id == ProcessingMode.formalWritingId
@@ -615,7 +801,7 @@ actor RecognitionSession {
             var llmFailed = false
 
             // Apply snippet replacements before LLM (e.g. "我的邮箱" → actual email)
-            finalText = SnippetStorage.applyEffective(to: finalText)
+            finalText = SnippetStorage.applyEffective(to: finalText, bundleId: targetBundleId)
 
             // Short text exemption (for non-streaming providers, 语音润色 only)
             if needsLLM && earlyLLMTask == nil && currentMode.id == ProcessingMode.formalWritingId {
@@ -803,6 +989,8 @@ actor RecognitionSession {
             state = .idle
             hasEmittedReadyForCurrentSession = false
             currentTranscript = .empty
+            // Pre-warm connection for next recording
+            warmUpASRConnection()
         }
         resetSpeculativeLLM()
         SystemVolumeManager.restore()
@@ -837,6 +1025,13 @@ actor RecognitionSession {
 
         case .transcript(let transcript):
             currentTranscript = transcript
+            if !transcript.displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                speechDetected = true
+                if let cont = firstStreamingTextCont {
+                    firstStreamingTextCont = nil
+                    cont.resume(returning: true)
+                }
+            }
             if let cont = finalTranscriptCont, isTranscriptEffectivelyFinal {
                 finalTranscriptCont = nil
                 cont.resume(returning: transcript.displayText)
@@ -997,7 +1192,7 @@ actor RecognitionSession {
     private func fireSpeculativeLLM() async {
         var text = currentTranscript.composedText
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        text = SnippetStorage.applyEffective(to: text)
+        text = SnippetStorage.applyEffective(to: text, bundleId: targetBundleId)
         guard !text.isEmpty, text != speculativeLLMText else { return }
         guard let llmConfig = loadEffectiveLLMConfig() else { return }
 
@@ -1093,6 +1288,24 @@ actor RecognitionSession {
         }
     }
 
+    /// Wait for the ASR to emit any non-empty streaming text, with timeout.
+    /// Returns true if text arrived, false on timeout.
+    private func awaitFirstStreamingText(timeout: Duration) async -> Bool {
+        let text = currentTranscript.composedText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { return true }
+        return await withCheckedContinuation { continuation in
+            self.firstStreamingTextCont = continuation
+            Task {
+                try? await Task.sleep(for: timeout)
+                if let cont = self.firstStreamingTextCont {
+                    self.firstStreamingTextCont = nil
+                    cont.resume(returning: false)
+                }
+            }
+        }
+    }
+
     /// Whether the current transcript is effectively final:
     /// either the isFinal flag is set, or we have confirmed text with no pending partial.
     private var isTranscriptEffectivelyFinal: Bool {
@@ -1130,10 +1343,10 @@ actor RecognitionSession {
                     }
                 }
                 Task.detached {
-                    try? await Task.sleep(for: .seconds(30))
+                    try? await Task.sleep(for: .seconds(90))
                     if finished.withLock({ let old = $0; $0 = true; return !old }) {
                         resultTask.cancel()
-                        DebugFileLogger.log("batch fallback (async) timeout after 30s")
+                        DebugFileLogger.log("batch fallback (async) timeout after 90s")
                         continuation.resume(returning: nil)
                     }
                 }
@@ -1176,7 +1389,7 @@ actor RecognitionSession {
             }
         }
         // Hard timeout via withCheckedContinuation (same pattern as withTimeout).
-        // If resultTask is stuck in a non-cooperative await, we return nil after 30s.
+        // If resultTask is stuck in a non-cooperative await, we return nil after 90s.
         return await withCheckedContinuation { continuation in
             let finished = OSAllocatedUnfairLock(initialState: false)
             Task.detached {
@@ -1186,10 +1399,10 @@ actor RecognitionSession {
                 }
             }
             Task.detached {
-                try? await Task.sleep(for: .seconds(30))
+                try? await Task.sleep(for: .seconds(90))
                 if finished.withLock({ let old = $0; $0 = true; return !old }) {
                     resultTask.cancel()
-                    DebugFileLogger.log("batch fallback timeout after 30s")
+                    DebugFileLogger.log("batch fallback timeout after 90s")
                     continuation.resume(returning: nil)
                 }
             }
@@ -1205,12 +1418,18 @@ actor RecognitionSession {
         NSLog("[Session] forceReset from state=%@", String(describing: state))
         DebugFileLogger.log("forceReset from state=\(state)")
 
+        if let cont = firstStreamingTextCont {
+            firstStreamingTextCont = nil
+            cont.resume(returning: false)
+        }
         if let cont = finalTranscriptCont {
             finalTranscriptCont = nil
             cont.resume(returning: nil)
         }
         eventConsumptionTask?.cancel()
         eventConsumptionTask = nil
+        maxDurationTask?.cancel()
+        maxDurationTask = nil
         resetSpeculativeLLM()
 
         audioEngine.stop()
