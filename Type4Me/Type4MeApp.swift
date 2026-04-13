@@ -557,6 +557,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             switch url.host {
             case "reload-vocabulary":
                 NSLog("[Type4Me] URL command: reload-vocabulary")
+                SnippetStorage.invalidateCache()
+                HotwordStorage.invalidateCache()
+                NotificationCenter.default.post(name: SnippetStorage.didChangeNotification, object: nil)
+                NotificationCenter.default.post(name: HotwordStorage.didChangeNotification, object: nil)
                 SenseVoiceServerManager.syncHotwordsAndRestart()
             case "auth":
                 NSLog("[Type4Me] URL command: auth (no-op, code-based auth now)")

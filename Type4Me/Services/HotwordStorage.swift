@@ -113,6 +113,15 @@ enum HotwordStorage {
 
     static let didChangeNotification = Notification.Name("HotwordStorageDidChange")
 
+    /// Clear in-memory caches so next load re-reads from disk.
+    /// Called when files are modified externally (e.g. by Claude Code skill).
+    static func invalidateCache() {
+        cacheLock.lock()
+        cachedBuiltin = nil
+        cachedUser = nil
+        cacheLock.unlock()
+    }
+
     static func save(_ words: [String]) {
         writeFile(words, to: userFileURL)
         cacheLock.lock()

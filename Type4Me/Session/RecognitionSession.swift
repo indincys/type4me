@@ -304,9 +304,13 @@ actor RecognitionSession {
             let volcConfig = VolcanoASRConfig(credentials: [
                 "appKey": appKey, "accessKey": accessKey, "resourceId": resourceId,
             ])!
-            try? KeychainService.saveASRCredentials(appKey: appKey, accessKey: accessKey, resourceId: resourceId)
+            do {
+                try KeychainService.saveASRCredentials(appKey: appKey, accessKey: accessKey, resourceId: resourceId)
+                NSLog("[Session] Loaded credentials from env vars and persisted to file")
+            } catch {
+                NSLog("[Session] WARNING: env var credentials loaded but failed to persist: %@", String(describing: error))
+            }
             config = volcConfig
-            NSLog("[Session] Loaded credentials from env vars and persisted to file")
         } else {
             NSLog("[Session] No ASR credentials found for provider=%@!", provider.rawValue)
             SoundFeedback.playError()
@@ -706,7 +710,7 @@ actor RecognitionSession {
         let canEarlyLLM = providerIsStreaming
         var earlyLLMTask: Task<String?, Never>?
         if needsLLM && canEarlyLLM {
-            var finalASRText = currentTranscript.composedText
+            var finalASRText = currentTranscript.displayText
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             finalASRText = SnippetStorage.applyEffective(to: finalASRText, bundleId: targetBundleId)
 
@@ -1043,7 +1047,7 @@ actor RecognitionSession {
                     cont.resume(returning: true)
                 }
             }
-            if let cont = finalTranscriptCont, isTranscriptEffectivelyFinal {
+            if let cont = finalTranscriptCont, currentTranscript.isFinal {
                 finalTranscriptCont = nil
                 cont.resume(returning: transcript.displayText)
             }
@@ -1285,7 +1289,7 @@ actor RecognitionSession {
     /// "Finalized" means either isFinal flag is set, or confirmed segments exist
     /// with no remaining partial text (Volcano via proxy doesn't send asyncFinal).
     private func awaitFinalTranscript(timeout: Duration) async -> String? {
-        if isTranscriptEffectivelyFinal {
+        if currentTranscript.isFinal {
             return currentTranscript.displayText
         }
         return await withCheckedContinuation { continuation in
@@ -1316,13 +1320,6 @@ actor RecognitionSession {
                 }
             }
         }
-    }
-
-    /// Whether the current transcript is effectively final:
-    /// either the isFinal flag is set, or we have confirmed text with no pending partial.
-    private var isTranscriptEffectivelyFinal: Bool {
-        currentTranscript.isFinal ||
-        (state == .finishing && !currentTranscript.confirmedSegments.isEmpty && currentTranscript.partialText.isEmpty)
     }
 
     static func shouldAttemptBatchFallback(

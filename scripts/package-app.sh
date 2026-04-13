@@ -165,10 +165,15 @@ if [ "$VARIANT" = "local" ]; then
         exit 1
     fi
 
-    # qwen3-asr-server (PyInstaller dist, ~230MB)
+    # qwen3-asr-server (PyInstaller dist)
+    # Build automatically with MLX_METAL_JIT=ON for macOS 14+ compatibility.
     # Placed in Contents/Resources/ (not MacOS/) to avoid codesign treating
     # PyInstaller internals (.dist-info, python3.x dirs) as nested bundles.
     QWEN3_DIST="$PROJECT_DIR/qwen3-asr-server/dist/qwen3-asr-server"
+    if [ "${SKIP_QWEN3_BUILD:-0}" != "1" ] && [ -f "$PROJECT_DIR/qwen3-asr-server/build.sh" ]; then
+        echo "Building qwen3-asr-server (MLX JIT mode for macOS 14+ compat)..."
+        bash "$PROJECT_DIR/qwen3-asr-server/build.sh"
+    fi
     if [ -d "$QWEN3_DIST" ]; then
         echo "Bundling qwen3-asr-server..."
         rm -rf "$APP_PATH/Contents/Resources/qwen3-asr-server-dist" "$APP_PATH/Contents/MacOS/qwen3-asr-server"

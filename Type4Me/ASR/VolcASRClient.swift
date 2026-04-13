@@ -336,22 +336,43 @@ actor VolcASRClient: SpeechRecognizer {
 
         // Detect dropped partial: server started a new utterance without confirming the old one.
         // Conditions: (1) server confirmed count didn't increase since last response,
-        // (2) old partial was substantial, (3) new partial shares little common prefix with old (LCP ratio < 0.5).
+        // (2) old partial was substantial.
+        // Two sub-cases:
+        //   a) new partial is non-empty but shares <50% prefix with old → replaced
+        //   b) new partial is empty → server cleared it (e.g. during finalization)
         if !isFinal,
            serverConfirmed.count <= prevServerConfirmedCount,
-           lastPartialText.count >= 4,
-           !partialText.isEmpty
+           lastPartialText.count >= 4
         {
-            let lcp = longestCommonPrefixLength(lastPartialText, partialText)
-            let ratio = Double(lcp) / Double(lastPartialText.count)
-            if ratio < 0.5 {
-                NSLog("[ASR] Dropped partial detected: \"%@\" → \"%@\" (LCP=%d ratio=%.2f), promoting to local confirmed",
-                      lastPartialText, partialText, lcp, ratio)
+            if partialText.isEmpty {
+                NSLog("[ASR] Partial cleared without confirmation: \"%@\", promoting to local confirmed",
+                      lastPartialText)
                 localConfirmedSegments.append(lastPartialText)
+            } else {
+                let lcp = longestCommonPrefixLength(lastPartialText, partialText)
+                let ratio = Double(lcp) / Double(lastPartialText.count)
+                if ratio < 0.5 {
+                    NSLog("[ASR] Dropped partial detected: \"%@\" → \"%@\" (LCP=%d ratio=%.2f), promoting to local confirmed",
+                          lastPartialText, partialText, lcp, ratio)
+                    localConfirmedSegments.append(lastPartialText)
+                }
             }
         }
 
         lastPartialText = partialText
+
+        // Guard against false promotion: if the new partial overlaps significantly
+        // with the last promoted segment, the server merely re-analyzed — undo.
+        if !partialText.isEmpty && localConfirmedSegments.count > serverConfirmed.count {
+            let lastPromoted = localConfirmedSegments.last!
+            let lcp = longestCommonPrefixLength(lastPromoted, partialText)
+            let ratio = Double(lcp) / Double(lastPromoted.count)
+            if ratio >= 0.5 {
+                NSLog("[ASR] Un-promoting \"%@\" — partial \"%@\" reclaims it (LCP ratio=%.2f)",
+                      lastPromoted, partialText, ratio)
+                localConfirmedSegments.removeLast()
+            }
+        }
 
         // Use local confirmed segments (which may include promoted partials)
         let effectiveConfirmed = localConfirmedSegments.count > serverConfirmed.count

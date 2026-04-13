@@ -25,6 +25,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     @State private var qwen3Toggling = false
     @AppStorage("tf_qwen3FinalEnabled") private var qwen3FinalEnabled = true
     @AppStorage("tf_sensevoiceEnabled") private var sensevoiceEnabled = true
+    @State private var qwen3StartError: String?
 
     private var currentASRFields: [CredentialField] {
         ASRProviderRegistry.configType(for: selectedASRProvider)?.credentialFields ?? []
@@ -432,6 +433,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                                            "Post-recognition calibration for higher accuracy. ~4GB memory."),
                             isRunning: qwen3Running,
                             isToggling: qwen3Toggling,
+                            errorMessage: qwen3StartError,
                             onStart: { toggleQwen3(true) },
                             onStop: { toggleQwen3(false) }
                         )
@@ -515,6 +517,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
         description: String,
         isRunning: Bool,
         isToggling: Bool,
+        errorMessage: String? = nil,
         onStart: @escaping () -> Void,
         onStop: @escaping () -> Void
     ) -> some View {
@@ -572,6 +575,14 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                         .controlSize(.small)
                 }
             }
+
+            if let errorMessage, !isToggling, !isRunning {
+                Text(errorMessage)
+                    .font(.system(size: 10))
+                    .foregroundStyle(TF.settingsAccentRed)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+            }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -614,6 +625,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
     private func toggleQwen3(_ enabled: Bool) {
         qwen3FinalEnabled = enabled
         qwen3Toggling = true
+        qwen3StartError = nil
         Task {
             let mgr = SenseVoiceServerManager.shared
             if enabled {
@@ -623,6 +635,7 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
                 } catch {
                     NSLog("[ASRSettings] Qwen3 start failed: %@", String(describing: error))
                     qwen3FinalEnabled = false
+                    qwen3StartError = extractStartError(error)
                 }
             } else {
                 await mgr.stopQwen3()
@@ -630,6 +643,26 @@ struct ASRSettingsCard: View, SettingsCardHelpers {
             }
             qwen3Toggling = false
         }
+    }
+
+    /// Pull a user-readable message from the server start error, including
+    /// stderr output captured by DebugFileLogger when available.
+    private func extractStartError(_ error: Error) -> String {
+        let desc = String(describing: error)
+        // Check recent debug log for the actual Python traceback
+        let recent = DebugFileLogger.recentLines(10)
+        if let metalLine = recent.first(where: { $0.contains("metallib") || $0.contains("ImportError") || $0.contains("Metal") }) {
+            return metalLine
+                .replacingOccurrences(of: "qwen3-asr-server: ", with: "")
+                .trimmingCharacters(in: .whitespaces)
+        }
+        if desc.contains("portDiscovery") {
+            return L("服务启动超时，请查看 Debug 日志", "Server start timed out. Check Debug logs.")
+        }
+        if desc.contains("Health check") {
+            return L("服务启动后健康检查失败", "Health check failed after server start.")
+        }
+        return L("启动失败: ", "Start failed: ") + desc.prefix(120)
     }
 
     private func testLocalModel() {

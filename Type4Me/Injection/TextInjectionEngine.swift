@@ -99,10 +99,13 @@ final class TextInjectionEngine: @unchecked Sendable {
     }
 
     /// Copy text to the system clipboard (used at session end).
-    func copyToClipboard(_ text: String) {
+    func copyToClipboard(_ text: String, transient: Bool = false) {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
+        if transient {
+            pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+        }
     }
 
     // MARK: - Clipboard injection
@@ -120,7 +123,7 @@ final class TextInjectionEngine: @unchecked Sendable {
         // Snapshot focused element BEFORE paste for outcome detection
         let before = captureFocusedElementSnapshot()
 
-        copyToClipboard(text)
+        copyToClipboard(text, transient: preserveClipboard)
         let postWriteChangeCount = NSPasteboard.general.changeCount
         usleep(50_000)
         simulatePaste()

@@ -50,6 +50,15 @@ enum DebugFileLogger {
         }
     }
 
+    /// Return the last `n` lines from the debug log (synchronous read).
+    static func recentLines(_ n: Int) -> [String] {
+        guard let data = try? Data(contentsOf: logURL),
+              let text = String(data: data, encoding: .utf8)
+        else { return [] }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        return Array(lines.suffix(n))
+    }
+
     private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         return f
