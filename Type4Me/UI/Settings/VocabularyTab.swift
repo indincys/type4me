@@ -1,5 +1,95 @@
 import SwiftUI
 
+/// Chrome-style tab shape with concave bottom corners.
+///
+/// The shape is split into two zones:
+/// - **Body** (top portion): the visible tab, with convex rounded top corners
+/// - **Feet** (bottom portion, height = footRadius): extends wider than the body,
+///   connected by concave quarter-circle arcs
+///
+///       ╭──────────────╮
+///       │   Tab Text   │
+///    ╭──╯              ╰──╮
+///    ╰────────────────────╯   ← flat bottom, sits on content area
+///
+private struct ChromeTabShape: Shape {
+    var topRadius: CGFloat = 8
+    var footRadius: CGFloat = 6
+    var skipLeftFoot: Bool = false
+    /// Extra height on left side to cover content area's top-left corner
+    var leftExtraBottom: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width
+        let h = rect.height
+        let tr = min(topRadius, (h - footRadius) / 2)
+        let fr = min(footRadius, h / 3)
+
+        return Path { p in
+            if skipLeftFoot {
+                // No left foot: straight left edge, extends below to cover corner gap
+                let leftBottom = h + leftExtraBottom
+                p.move(to: CGPoint(x: 0, y: leftBottom))
+                p.addLine(to: CGPoint(x: 0, y: tr))
+
+                // Top-left corner (convex)
+                p.addArc(
+                    center: CGPoint(x: tr, y: tr),
+                    radius: tr,
+                    startAngle: .degrees(180),
+                    endAngle: .degrees(270),
+                    clockwise: false
+                )
+            } else {
+                // Left foot with concave arc
+                p.move(to: CGPoint(x: 0, y: h))
+                p.addArc(
+                    center: CGPoint(x: 0, y: h - fr),
+                    radius: fr,
+                    startAngle: .degrees(90),
+                    endAngle: .degrees(0),
+                    clockwise: true
+                )
+                p.addLine(to: CGPoint(x: fr, y: tr))
+
+                // Top-left corner (convex)
+                p.addArc(
+                    center: CGPoint(x: fr + tr, y: tr),
+                    radius: tr,
+                    startAngle: .degrees(180),
+                    endAngle: .degrees(270),
+                    clockwise: false
+                )
+            }
+
+            // Top edge
+            let rightBodyX = w - fr - tr
+            p.addLine(to: CGPoint(x: rightBodyX, y: 0))
+
+            // Top-right corner (convex)
+            p.addArc(
+                center: CGPoint(x: rightBodyX, y: tr),
+                radius: tr,
+                startAngle: .degrees(270),
+                endAngle: .degrees(0),
+                clockwise: false
+            )
+
+            // Right side down to right foot
+            p.addLine(to: CGPoint(x: w - fr, y: h - fr))
+
+            // Right foot: concave arc
+            p.addArc(
+                center: CGPoint(x: w, y: h - fr),
+                radius: fr,
+                startAngle: .degrees(180),
+                endAngle: .degrees(90),
+                clockwise: true
+            )
+        }
+    }
+}
+
 struct VocabularyTab: View {
 
     // Hotwords (user file)
@@ -21,6 +111,7 @@ struct VocabularyTab: View {
     // App-specific scope
     @State private var registeredApps: [SnippetStorage.AppInfo] = []
     @State private var selectedAppScope: String? = nil  // nil = global
+    @State private var deletingAppBundleId: String? = nil
 
     // Built-in example snippet
     private static let builtinExampleReplacement = "Type4Me"
@@ -57,7 +148,7 @@ struct VocabularyTab: View {
             }
             .padding(.bottom, 4)
 
-            Text(L("添加容易被误识别的专有名词，识别引擎会优先匹配。", "Add proper nouns that are often misrecognized. The ASR engine will prioritize them."))
+            Text(L("添加热词，将被上传给识别引擎被优先识别。", "Added hotwords are uploaded to the ASR engine for priority recognition."))
                 .font(.system(size: 11))
                 .foregroundStyle(TF.settingsTextTertiary)
                 .padding(.bottom, 12)
@@ -80,11 +171,6 @@ struct VocabularyTab: View {
                     .onSubmit { addHotword() }
             }
 
-            Text(L("回车添加，点 × 移除", "Press Enter to add, click x to remove"))
-                .font(.system(size: 10))
-                .foregroundStyle(TF.settingsTextTertiary)
-                .padding(.top, 4)
-
             // Module separator
             Spacer().frame(height: 20)
             Divider()
@@ -100,69 +186,95 @@ struct VocabularyTab: View {
             }
             .padding(.bottom, 4)
 
-            appScopeBar()
-
-            Text(L("说到触发词时自动替换为对应内容。搭配官方 Skill 可快捷管理。", "Trigger words are auto-replaced with mapped content. Use with official Skill for easy management."))
+            Text(L("本地执行规则，将任何文字替换成你想要的文字。", "Local rules that replace any text with what you want."))
                 .font(.system(size: 11))
                 .foregroundStyle(TF.settingsTextTertiary)
-                .padding(.bottom, 12)
+                .padding(.bottom, 8)
 
-            // Add new row (top)
-            HStack(spacing: 8) {
-                TextField(L("替换内容", "Replacement"), text: $newValue)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(width: 152)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                    )
+            // Tab bar (Chrome-style: feet sit on top of content area)
+            appScopeBar()
+                .zIndex(1)
 
-                Image(systemName: "arrow.left")
-                    .font(.system(size: 10))
-                    .foregroundStyle(TF.settingsTextTertiary)
+            // Content area
+            VStack(alignment: .leading, spacing: 0) {
+                // Add new row
+                HStack(spacing: 8) {
+                    TextField(L("替换内容", "Replacement"), text: $newValue)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .frame(width: 152)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        )
 
-                TextField(L("触发词", "Trigger"), text: $newTrigger)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .frame(width: 120)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                    )
-                    .onSubmit { addSnippet() }
+                    Image(systemName: "arrow.left")
+                        .font(.system(size: 10))
+                        .foregroundStyle(TF.settingsTextTertiary)
 
-                Button {
-                    addSnippet()
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundStyle(TF.settingsAccentGreen)
+                    TextField(L("触发词", "Trigger"), text: $newTrigger)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .frame(width: 120)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        )
+                        .onSubmit { addSnippet() }
+
+                    Button {
+                        addSnippet()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(TF.settingsAccentGreen)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(newTrigger.isEmpty || newValue.isEmpty)
                 }
-                .buttonStyle(.plain)
-                .disabled(newTrigger.isEmpty || newValue.isEmpty)
-            }
-            .padding(.vertical, 4)
+                .padding(.vertical, 8)
 
-            // User snippets
-            ForEach(Array(displaySnippets.enumerated()), id: \.element.id) { index, group in
-                SettingsDivider()
-                snippetGroupView(group: group)
-                    .id("snippet-\(group.id)")
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(TF.settingsAccentGreen.opacity(0.15))
-                            .opacity(highlightedGroup == group.replacement ? 1 : 0)
-                    )
-                    .padding(.horizontal, -8)
-            }
+                // Snippet list
+                ForEach(Array(displaySnippets.enumerated()), id: \.element.id) { index, group in
+                    SettingsDivider()
+                    snippetGroupView(group: group)
+                        .id("snippet-\(group.id)")
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(TF.settingsAccentGreen.opacity(0.15))
+                                .opacity(highlightedGroup == group.replacement ? 1 : 0)
+                        )
+                        .padding(.horizontal, -8)
+                }
 
+                if displaySnippets.isEmpty {
+                    Text(selectedAppScope != nil
+                         ? L("这个应用还没有专属片段，从上方添加。", "No app-specific snippets yet. Add one above.")
+                         : L("还没有片段，从上方添加。", "No snippets yet. Add one above."))
+                        .font(.system(size: 11))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 16)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 8)
+            .background(
+                UnevenRoundedRectangle(
+                    topLeadingRadius: selectedAppScope == nil ? 0 : 10,
+                    bottomLeadingRadius: 10,
+                    bottomTrailingRadius: 10,
+                    topTrailingRadius: 10
+                )
+                .fill(TF.settingsBg)
+            )
 
             Spacer()
         }
@@ -210,6 +322,26 @@ struct VocabularyTab: View {
                 .onAppear {
                     bulkSnippetsText = snippetsToBulkText(snippets)
                 }
+        }
+        .alert(
+            L("移除应用", "Remove App"),
+            isPresented: Binding(
+                get: { deletingAppBundleId != nil },
+                set: { if !$0 { deletingAppBundleId = nil } }
+            )
+        ) {
+            Button(L("取消", "Cancel"), role: .cancel) { deletingAppBundleId = nil }
+            Button(L("移除", "Remove"), role: .destructive) {
+                if let id = deletingAppBundleId {
+                    removeAppScope(bundleId: id)
+                    deletingAppBundleId = nil
+                }
+            }
+        } message: {
+            if let id = deletingAppBundleId, let app = registeredApps.first(where: { $0.bundleId == id }) {
+                Text(L("确定要移除「\(app.name)」的专属片段吗？已配置的片段将被删除。",
+                        "Remove \"\(app.name)\" and its snippets? This cannot be undone."))
+            }
         }
     }
 
@@ -313,7 +445,7 @@ struct VocabularyTab: View {
     }
 
     private func snippetGroupView(group: SnippetGroup) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .center, spacing: 6) {
             // Replacement (left side)
             if editingGroupReplacement == group.replacement {
                 TextField("", text: $editReplacementText)
@@ -322,9 +454,56 @@ struct VocabularyTab: View {
                     .foregroundStyle(TF.settingsText)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(TF.settingsBg))
+                    .fixedSize()
+                    .frame(minWidth: 40)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(TF.settingsCard))
                     .onSubmit { commitGroupEdit(oldReplacement: group.replacement) }
+            } else {
+                HStack(spacing: 4) {
+                    if group.replacement == Self.builtinExampleReplacement {
+                        Text(L("示例", "Example"))
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(TF.settingsCardAlt))
+                    }
+                    Text(group.replacement)
+                        .font(.system(size: 12))
+                        .foregroundStyle(TF.settingsText)
+                }
+            }
 
+            Image(systemName: "arrow.left")
+                .font(.system(size: 9))
+                .foregroundStyle(TF.settingsTextTertiary)
+
+            // Trigger words (right side, separated by vertical dividers)
+            WrappingHStack(alignment: .center, spacing: 4) {
+                ForEach(Array(group.triggers.enumerated()), id: \.element) { index, trigger in
+                    if index > 0 {
+                        Rectangle()
+                            .fill(TF.settingsTextTertiary.opacity(0.3))
+                            .frame(width: 1, height: 14)
+                    }
+                    triggerTag(trigger: trigger, replacement: group.replacement)
+                }
+
+                Rectangle()
+                    .fill(TF.settingsTextTertiary.opacity(0.3))
+                    .frame(width: 1, height: 14)
+
+                TextField(L("添加...", "Add..."), text: newTriggerBinding(for: group.replacement))
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 12))
+                    .frame(width: 60)
+                    .padding(.horizontal, 4)
+                    .onSubmit { addTriggerToGroup(replacement: group.replacement) }
+            }
+
+            Spacer()
+
+            if editingGroupReplacement == group.replacement {
                 Button { commitGroupEdit(oldReplacement: group.replacement) } label: {
                     Image(systemName: "checkmark")
                         .font(.system(size: 9, weight: .bold))
@@ -339,44 +518,6 @@ struct VocabularyTab: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                if group.replacement == Self.builtinExampleReplacement {
-                    Text(L("示例", "Example"))
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(TF.settingsTextTertiary)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Capsule().fill(TF.settingsCardAlt))
-                }
-                Text(group.replacement)
-                    .font(.system(size: 12))
-                    .foregroundStyle(TF.settingsText)
-            }
-
-            Image(systemName: "arrow.left")
-                .font(.system(size: 9))
-                .foregroundStyle(TF.settingsTextTertiary)
-
-            // Trigger tags (right side)
-            WrappingHStack(spacing: 6) {
-                ForEach(group.triggers, id: \.self) { trigger in
-                    triggerTag(trigger: trigger, replacement: group.replacement)
-                }
-
-                TextField(L("添加...", "Add..."), text: newTriggerBinding(for: group.replacement))
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12))
-                    .frame(width: 60, height: 28)
-                    .padding(.horizontal, 8)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                    )
-                    .onSubmit { addTriggerToGroup(replacement: group.replacement) }
-            }
-
-            Spacer()
-
-            if editingGroupReplacement != group.replacement {
                 Button { startGroupEdit(replacement: group.replacement) } label: {
                     Image(systemName: "pencil")
                         .font(.system(size: 9))
@@ -396,7 +537,7 @@ struct VocabularyTab: View {
     }
 
     private func triggerTag(trigger: String, replacement: String) -> some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 3) {
             Text(trigger)
                 .font(.system(size: 12))
                 .foregroundStyle(TF.settingsTextSecondary)
@@ -404,28 +545,27 @@ struct VocabularyTab: View {
                 removeTrigger(trigger: trigger, replacement: replacement)
             } label: {
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(TF.settingsTextTertiary)
+                    .font(.system(size: 7, weight: .bold))
+                    .foregroundStyle(TF.settingsTextTertiary.opacity(0.6))
             }
             .buttonStyle(.plain)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 6).fill(TF.settingsBg)
-        )
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
     }
 
     // MARK: - App Scope Bar
 
     private func appScopeBar() -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                // Global tab
+            HStack(spacing: 0) {
+                // Global tab (with SF Symbol globe icon)
                 appScopeTab(
-                    label: L("全局", "Global"),
+                    label: L("全局生效", "Global"),
                     bundleId: nil,
-                    icon: nil
+                    icon: nil,
+                    systemIcon: "globe",
+                    isFirst: true
                 )
 
                 // Per-app tabs
@@ -444,35 +584,36 @@ struct VocabularyTab: View {
                     }
                 }
 
-                // Add app button
+                // Separator + add button (Chrome-style)
+                Divider()
+                    .frame(height: 14)
+                    .padding(.horizontal, 8)
+
                 Button {
                     pickApp()
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .foregroundStyle(TF.settingsTextTertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(TF.settingsTextTertiary.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [4]))
-                    )
+                    Image(systemName: "plus")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(TF.settingsTextTertiary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
         }
-        .padding(.bottom, 8)
     }
 
-    private func appScopeTab(label: String, bundleId: String?, icon: NSImage?) -> some View {
+    private func appScopeTab(label: String, bundleId: String?, icon: NSImage?, systemIcon: String? = nil, isFirst: Bool = false) -> some View {
         let isSelected = selectedAppScope == bundleId
+        let fr: CGFloat = 6
         return Button {
             switchScope(to: bundleId)
         } label: {
             HStack(spacing: 4) {
-                if let icon = icon {
+                if let systemIcon {
+                    Image(systemName: systemIcon)
+                        .font(.system(size: 11))
+                } else if let icon {
                     Image(nsImage: icon)
                         .resizable()
                         .frame(width: 14, height: 14)
@@ -480,17 +621,35 @@ struct VocabularyTab: View {
                 Text(label)
                     .font(.system(size: 12))
                     .lineLimit(1)
+
+                // Close button on selected app tabs (not global)
+                if isSelected && bundleId != nil {
+                    Button {
+                        deletingAppBundleId = bundleId
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(TF.settingsTextTertiary)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
-            .foregroundStyle(isSelected ? TF.settingsAccentGreen : TF.settingsTextSecondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
+            .foregroundStyle(isSelected ? TF.settingsText : TF.settingsTextTertiary)
+            .padding(.horizontal, 14)
+            .padding(.top, isSelected ? 11 : 6)
+            .padding(.bottom, isSelected ? 5 : 6)
+            // Foot space: left foot only if not first tab
+            .padding(.leading, isSelected && !isFirst ? fr : 0)
+            .padding(.trailing, isSelected ? fr : 0)
+            .padding(.bottom, isSelected ? fr : 0)
+            .zIndex(isSelected ? 1 : 0)
             .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(isSelected ? TF.settingsAccentGreen.opacity(0.12) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(isSelected ? TF.settingsAccentGreen.opacity(0.5) : TF.settingsTextTertiary.opacity(0.2), lineWidth: 1)
+                Group {
+                    if isSelected {
+                        ChromeTabShape(topRadius: 8, footRadius: fr, skipLeftFoot: isFirst)
+                            .fill(TF.settingsBg)
+                    }
+                }
             )
         }
         .buttonStyle(.plain)
@@ -521,22 +680,25 @@ struct VocabularyTab: View {
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
 
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        guard let bundle = Bundle(url: url),
-              let bundleId = bundle.bundleIdentifier else { return }
+        // Use begin() instead of runModal() to avoid first-click focus issues in SwiftUI
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            guard let bundle = Bundle(url: url),
+                  let bundleId = bundle.bundleIdentifier else { return }
 
-        let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? url.deletingPathExtension().lastPathComponent
+            let name = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
+                ?? bundle.object(forInfoDictionaryKey: "CFBundleName") as? String
+                ?? url.deletingPathExtension().lastPathComponent
 
-        let app = SnippetStorage.AppInfo(bundleId: bundleId, name: name)
-        guard !registeredApps.contains(app) else {
-            switchScope(to: bundleId)
-            return
+            let app = SnippetStorage.AppInfo(bundleId: bundleId, name: name)
+            guard !self.registeredApps.contains(app) else {
+                self.switchScope(to: bundleId)
+                return
+            }
+            SnippetStorage.addApp(app)
+            self.registeredApps = SnippetStorage.loadRegistry()
+            self.switchScope(to: bundleId)
         }
-        SnippetStorage.addApp(app)
-        registeredApps = SnippetStorage.loadRegistry()
-        switchScope(to: bundleId)
     }
 
     private func removeAppScope(bundleId: String) {
