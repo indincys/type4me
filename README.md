@@ -396,6 +396,16 @@ Steps 2-3 are optional. Skipping them disables local ASR, but cloud ASR works fi
 <video src="https://github.com/user-attachments/assets/d5ad6da9-b924-4fd6-9812-d0d9868563a4" width="600" title="demo" controls>demo</video>
 
 
+## Star History
+
+<a href="https://star-history.com/#joewongjc/type4me&Date">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=joewongjc/type4me&type=Date" />
+ </picture>
+</a>
+
 ## License
 
 [MIT License](LICENSE)
