@@ -1,0 +1,99 @@
+name: Build and Release DMG
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 1.9.3"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Cloud DMG Release
+    runs-on: macos-26
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: release
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+            VERSION="${VERSION#v}"
+            TAG="v${VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#v}"
+          fi
+
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][A-Za-z0-9]+)?$ ]]; then
+            echo "Invalid version: $VERSION"
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "dmg=Type4Me-v${VERSION}-cloud.dmg" >> "$GITHUB_OUTPUT"
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Run full test suite
+        run: swift test
+
+      - name: Build cloud DMG
+        run: |
+          APP_VERSION="${{ steps.release.outputs.version }}" \
+          DMG_NAME="${{ steps.release.outputs.dmg }}" \
+          bash scripts/build-dmg.sh
+
+      - name: Verify DMG
+        run: |
+          set -euo pipefail
+          DMG="dist/${{ steps.release.outputs.dmg }}"
+          MOUNT="${RUNNER_TEMP}/type4me-dmg"
+          mkdir -p "$MOUNT"
+          hdiutil verify "$DMG"
+          hdiutil attach "$DMG" -nobrowse -readonly -mountpoint "$MOUNT"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$MOUNT/Type4Me.app/Contents/Info.plist"
+          lipo -info "$MOUNT/Type4Me.app/Contents/MacOS/Type4Me"
+          codesign --verify --strict --verbose=2 "$MOUNT/Type4Me.app"
+          hdiutil detach "$MOUNT"
+
+      - name: Create tag for manual releases
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists locally"
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+          fi
+          git push origin "$TAG" || true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          DMG="dist/${{ steps.release.outputs.dmg }}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$DMG" --clobber
+          else
+            gh release create "$TAG" "$DMG" \
+              --title "Type4Me $TAG" \
+              --notes "Cloud-only Type4Me DMG. Built automatically by GitHub Actions."
+          fi

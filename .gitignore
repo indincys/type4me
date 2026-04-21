@@ -2,6 +2,7 @@
 .build/
 AECTest/.build/
 dist/
+build/
 *.dmg
 
 # IDE / Editor

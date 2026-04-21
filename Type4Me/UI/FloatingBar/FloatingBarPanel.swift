@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - NSPanel Subclass
 
 /// Non-activating floating panel that never steals focus from the target app.
-/// Forces dark appearance for the sci-fi themed floating bar.
+/// Uses the system appearance so Liquid Glass samples the desktop naturally.
 final class FloatingBarPanel: NSPanel {
 
     init(contentRect: NSRect) {
@@ -24,7 +24,6 @@ final class FloatingBarPanel: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         animationBehavior = .utilityWindow
-        appearance = NSAppearance(named: .darkAqua)
     }
 
     override var canBecomeKey: Bool { false }

@@ -4,6 +4,22 @@ import XCTest
 @MainActor
 final class AppStateTests: XCTestCase {
 
+    private let visualStyleKey = "tf_visualStyle"
+
+    private func withVisualStyle(_ style: String, run body: () -> Void) {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: visualStyleKey)
+        defaults.set(style, forKey: visualStyleKey)
+        defer {
+            if let previous {
+                defaults.set(previous, forKey: visualStyleKey)
+            } else {
+                defaults.removeObject(forKey: visualStyleKey)
+            }
+        }
+        body()
+    }
+
     func testStartRecordingTransitionsToPreparing() {
         let appState = AppState()
         appState.startRecording()
@@ -50,6 +66,35 @@ final class AppStateTests: XCTestCase {
         appState.stopRecording()
 
         XCTAssertEqual(appState.barPhase, .processing)
+    }
+
+    func testStartRecordingStillShowsPanelWhenRecordingEffectsAreOff() {
+        withVisualStyle("off") {
+            let appState = AppState()
+            var showCount = 0
+            appState.onShowPanel = { showCount += 1 }
+
+            appState.startRecording()
+
+            XCTAssertEqual(appState.barPhase, .preparing)
+            XCTAssertEqual(showCount, 1)
+        }
+    }
+
+    func testStopRecordingDoesNotReopenPanelWhenRecordingEffectsAreOff() {
+        withVisualStyle("off") {
+            let appState = AppState()
+            appState.currentMode = .smartDirect
+            var showCount = 0
+            appState.onShowPanel = { showCount += 1 }
+
+            appState.startRecording()
+            appState.markRecordingReady()
+            appState.stopRecording()
+
+            XCTAssertEqual(appState.barPhase, .processing)
+            XCTAssertEqual(showCount, 1)
+        }
     }
 
     func testSetLiveTranscriptReplacesExistingConfirmedSegments() {

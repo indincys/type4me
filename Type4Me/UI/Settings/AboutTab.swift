@@ -34,12 +34,12 @@ struct AboutTab: View {
             // Links
             HStack(spacing: 12) {
                 linkButton("GitHub", icon: "chevron.left.forwardslash.chevron.right") {
-                    if let url = URL(string: "https://github.com/joewongjc/type4me") {
+                    if let url = URL(string: "https://github.com/indincys/type4me-cloud") {
                         NSWorkspace.shared.open(url)
                     }
                 }
                 linkButton(L("反馈", "Feedback"), icon: "envelope") {
-                    if let url = URL(string: "https://github.com/joewongjc/type4me/issues") {
+                    if let url = URL(string: "https://github.com/indincys/type4me-cloud/issues") {
                         NSWorkspace.shared.open(url)
                     }
                 }
@@ -115,7 +115,7 @@ struct AboutTab: View {
 
                 // GitHub link as secondary option
                 Button {
-                    if let url = URL(string: "https://github.com/joewongjc/type4me/releases") {
+                    if let url = URL(string: "https://github.com/indincys/type4me-cloud/releases") {
                         NSWorkspace.shared.open(url)
                     }
                 } label: {

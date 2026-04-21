@@ -2,6 +2,7 @@ import SwiftUI
 
 /// Cached font for text measurement (module-level to avoid generic-type static restriction).
 private let floatingBarFont = NSFont.systemFont(ofSize: 14, weight: .medium)
+private let floatingBarRecordingBaseWidth: CGFloat = 154
 
 // MARK: - FloatingBarState Protocol
 
@@ -20,41 +21,45 @@ protocol FloatingBarState: AnyObject, Observable {
     var effectiveProcessingLabel: String { get }
 }
 
-/// Dark-themed floating transcription bar with smooth morphing between states.
+/// Liquid Glass floating transcription bar with smooth morphing between states.
 ///
-/// Design: single capsule container that animates width + content transitions.
-/// - Recording: audio-reactive dot + live text + timer, breathing border
-/// - Processing: rotating orb with breathing glow + "AI" badge
-/// - Done: full progress bar + centered text
+/// Design: single glass capsule that animates width + content transitions.
+/// - Recording: audio-reactive glass control + live transcript
+/// - Processing: glass progress field + processing label
+/// - Done: completed progress field + centered feedback
 struct FloatingBarView<S: FloatingBarState>: View {
 
     let state: S
 
-
     @State private var breathe = false
     @State private var doneGlow = true
     /// High-water mark: only grows during recording, never shrinks (prevents ASR correction jitter)
-    @State private var recordingPeakWidth: CGFloat = TF.barHeight
+    @State private var recordingPeakWidth: CGFloat = floatingBarRecordingBaseWidth
     @State private var processingStartDate: Date?
     @State private var doneStartDate: Date?
     @State private var isHovered = false
     @AppStorage("tf_hoverTranscriptPreview") private var hoverTranscriptPreview = true
+    @AppStorage("tf_visualStyle") private var visualStyle = "timeline"
 
     // MARK: - Transcript Popup
 
     private var showTranscriptPopup: Bool {
         guard hoverTranscriptPreview, isHovered, state.barPhase == .recording, !state.segments.isEmpty else { return false }
         let textWidth = measureText(state.transcriptionText)
-        return textWidth + 66 > TF.barWidth
+        return textWidth + 96 > TF.barWidth
+    }
+
+    private var effectsEnabled: Bool {
+        visualStyle != "off"
     }
 
     private var capsuleWidth: CGFloat {
         switch state.barPhase {
         case .preparing:
-            return TF.barHeight
+            return effectsEnabled ? TF.barHeight : floatingBarRecordingBaseWidth
         case .recording:
             if state.segments.isEmpty {
-                return state.isQwen3OnlyMode ? 110 : TF.barHeight
+                return floatingBarRecordingBaseWidth
             }
             return recordingPeakWidth
         case .processing:
@@ -69,6 +74,54 @@ struct FloatingBarView<S: FloatingBarState>: View {
     }
 
     var body: some View {
+        floatingStack
+            .background {
+                FloatingBarHoverTracker { hovered in
+                    withAnimation(TF.springSnappy) {
+                        isHovered = hovered
+                    }
+                }
+            }
+            .padding(.bottom, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .animation(TF.springSnappy, value: state.barPhase != .hidden)
+            .animation(TF.springSnappy, value: showTranscriptPopup)
+            .onChange(of: state.barPhase) { _, newPhase in
+                handlePhaseChange(newPhase)
+            }
+            .onChange(of: state.segments) { _, newSegments in
+                guard state.barPhase == .recording else { return }
+                let text = newSegments.map(\.text).joined()
+                let textWidth = measureText(text)
+                let needed = min(TF.barWidth, max(floatingBarRecordingBaseWidth, textWidth + 96.0))
+                if needed > recordingPeakWidth {
+                    // Growing: fixed velocity 250pt/s
+                    let distance = needed - recordingPeakWidth
+                    let duration = max(0.12, Double(distance / 250.0))
+                    withAnimation(.linear(duration: duration)) {
+                        recordingPeakWidth = needed
+                    }
+                } else if recordingPeakWidth - needed > 30 {
+                    // Large correction (hotword etc.): allow shrink
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        recordingPeakWidth = needed
+                    }
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var floatingStack: some View {
+        if #available(macOS 26.0, *) {
+            GlassEffectContainer(spacing: TF.transcriptPopupGap) {
+                stackContent
+            }
+        } else {
+            stackContent
+        }
+    }
+
+    private var stackContent: some View {
         VStack(spacing: TF.transcriptPopupGap) {
             if showTranscriptPopup {
                 transcriptPopup
@@ -86,54 +139,24 @@ struct FloatingBarView<S: FloatingBarState>: View {
                 ))
             }
         }
-        .background {
-            FloatingBarHoverTracker { hovered in
-                withAnimation(TF.springSnappy) {
-                    isHovered = hovered
-                }
-            }
-        }
-        .padding(.bottom, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .animation(TF.springSnappy, value: state.barPhase != .hidden)
-        .animation(TF.springSnappy, value: showTranscriptPopup)
-        .onChange(of: state.barPhase) { _, newPhase in
-            handlePhaseChange(newPhase)
-        }
-        .onChange(of: state.segments) { _, newSegments in
-            guard state.barPhase == .recording else { return }
-            let text = newSegments.map(\.text).joined()
-            let textWidth = measureText(text)
-            let needed = min(TF.barWidth, max(TF.barHeight, textWidth + 66.0))
-            if needed > recordingPeakWidth {
-                // Growing: fixed velocity 250pt/s
-                let distance = needed - recordingPeakWidth
-                let duration = max(0.12, Double(distance / 250.0))
-                withAnimation(.linear(duration: duration)) {
-                    recordingPeakWidth = needed
-                }
-            } else if recordingPeakWidth - needed > 30 {
-                // Large correction (hotword etc.): allow shrink
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    recordingPeakWidth = needed
-                }
-            }
-        }
     }
 
     // MARK: - Capsule Container
 
     private var capsuleBar: some View {
-        barContent
-            .animation(TF.springSnappy, value: state.barPhase)
-            .frame(width: capsuleWidth, height: TF.barHeight)
-            .clipShape(Capsule())
-            .background {
-                capsuleBackground
-                    .clipShape(Capsule())
-            }
-            .shadow(color: Color(white: 0.08, opacity: 0.5), radius: 5, x: 0, y: 0)
-            .animation(TF.springSnappy, value: state.barPhase)
+        ZStack {
+            capsuleBackground
+
+            barContent
+                .animation(TF.springSnappy, value: state.barPhase)
+        }
+        .frame(width: capsuleWidth, height: TF.barHeight)
+        .clipShape(Capsule())
+        .floatingGlass(tint: glassTint, in: Capsule())
+        .overlay { capsuleBorder }
+        .shadow(color: shadowColor, radius: shadowRadius, x: 0, y: 10)
+        .shadow(color: Color.black.opacity(0.12), radius: 1, x: 0, y: 0)
+        .animation(TF.springSnappy, value: state.barPhase)
     }
 
     // MARK: - Content by Phase
@@ -178,28 +201,43 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var preparingContent: some View {
         HStack(spacing: 0) {
-            PreparingDot()
+            if effectsEnabled {
+                PreparingDot()
+            } else {
+                StaticRecordingIndicator()
+                Text(L("准备中", "Preparing"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
         }
+        .padding(.leading, effectsEnabled ? 0 : 12)
+        .padding(.trailing, effectsEnabled ? 0 : 16)
         .frame(maxWidth: .infinity)
     }
 
     private var recordingContent: some View {
         HStack(spacing: 10) {
-            // Module 1: dot (fixed position, 14pt from left edge)
-            RecordingDot(meter: state.audioLevel)
+            // Module 1: fixed leading indicator keeps transcript text stable.
+            if effectsEnabled {
+                LiquidRecordingIndicator(meter: state.audioLevel)
+            } else {
+                StaticRecordingIndicator()
+            }
 
             // Module 2: text container (fills remaining space, grows with frame)
             // Uses overlay so text sizing never affects HStack layout
-            if state.segments.isEmpty && state.isQwen3OnlyMode {
-                Text(L("录音中", "Recording"))
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
+            if state.segments.isEmpty {
+                Text(L("聆听中", "Listening"))
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
             } else if !state.segments.isEmpty {
                 Color.clear
                     .overlay(alignment: .trailing) {
                         Text(state.transcriptionText)
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundStyle(.white)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(.primary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -223,14 +261,15 @@ struct FloatingBarView<S: FloatingBarState>: View {
                     .transition(.opacity)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 12)
+        .padding(.trailing, 16)
     }
 
     private var processingContent: some View {
         ZStack {
             Text(state.effectiveProcessingLabel)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -239,7 +278,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
         ZStack {
             Text(state.feedbackMessage)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .frame(maxWidth: .infinity)
     }
@@ -250,7 +289,7 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
             Text(state.feedbackMessage)
                 .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
         }
         .padding(.horizontal, 14)
@@ -260,14 +299,21 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var capsuleBackground: some View {
         ZStack {
-            Color(white: 0.08, opacity: 0.88)
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: glassOverlayColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
 
-            if state.barPhase == .recording {
+            if state.barPhase == .recording && effectsEnabled {
                 AudioRipple(meter: state.audioLevel)
                     .transition(.opacity)
             }
 
-            if state.barPhase == .processing || state.barPhase == .done {
+            if effectsEnabled && (state.barPhase == .processing || state.barPhase == .done) {
                 ProcessingProgress(
                     finishTime: state.processingFinishTime,
                     processingStartDate: processingStartDate,
@@ -289,23 +335,107 @@ struct FloatingBarView<S: FloatingBarState>: View {
 
     private var capsuleBorder: some View {
         Capsule()
-            .stroke(borderColor, lineWidth: 1)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(borderColor.opacity),
+                        phaseAccent.opacity(borderColor.accentOpacity),
+                        Color.white.opacity(effectsEnabled ? 0.06 : 0.12),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1
+            )
     }
 
-    private var borderColor: Color {
+    private var glassTint: Color? {
+        switch state.barPhase {
+        case .recording:
+            effectsEnabled ? TF.recording.opacity(0.08) : nil
+        case .processing:
+            effectsEnabled ? Color.blue.opacity(0.06) : nil
+        case .done:
+            effectsEnabled ? TF.success.opacity(0.08) : nil
+        case .error:
+            TF.settingsAccentRed.opacity(0.10)
+        default:
+            nil
+        }
+    }
+
+    private var phaseAccent: Color {
+        if !effectsEnabled && state.barPhase != .error {
+            return Color.white
+        }
+        return switch state.barPhase {
+        case .recording:
+            TF.recording
+        case .processing:
+            Color(red: 0.32, green: 0.54, blue: 0.95)
+        case .done:
+            TF.success
+        case .error:
+            TF.settingsAccentRed
+        default:
+            Color.white
+        }
+    }
+
+    private var glassOverlayColors: [Color] {
+        if !effectsEnabled && state.barPhase != .error {
+            return [
+                Color.white.opacity(0.10),
+                Color.white.opacity(0.025),
+                Color.white.opacity(0.015),
+            ]
+        }
+        return [
+            Color.white.opacity(0.14),
+            phaseAccent.opacity(0.08),
+            Color.white.opacity(0.025),
+        ]
+    }
+
+    private var shadowColor: Color {
+        if !effectsEnabled && state.barPhase != .error {
+            return Color.black.opacity(0.14)
+        }
+        return switch state.barPhase {
+        case .recording:
+            TF.recording.opacity(0.18)
+        case .processing:
+            Color.blue.opacity(0.14)
+        case .done:
+            TF.success.opacity(0.16)
+        case .error:
+            TF.settingsAccentRed.opacity(0.16)
+        default:
+            Color.black.opacity(0.14)
+        }
+    }
+
+    private var shadowRadius: CGFloat {
+        if !effectsEnabled && state.barPhase != .error {
+            return 14
+        }
+        return state.barPhase == .recording && breathe ? 18 : 12
+    }
+
+    private var borderColor: (opacity: Double, accentOpacity: Double) {
         switch state.barPhase {
         case .preparing:
-            .white.opacity(0.04)
+            effectsEnabled ? (0.28, 0.08) : (0.32, 0.00)
         case .recording:
-            .white.opacity(breathe ? 0.14 : 0.05)
+            effectsEnabled ? (breathe ? 0.42 : 0.24, 0.26) : (0.32, 0.00)
         case .processing:
-            .white.opacity(0.07)
+            effectsEnabled ? (0.32, 0.20) : (0.32, 0.00)
         case .done:
-            TF.success.opacity(doneGlow ? 0.3 : 0.08)
+            effectsEnabled ? (doneGlow ? 0.42 : 0.24, doneGlow ? 0.30 : 0.14) : (0.32, 0.00)
         case .error:
-            TF.settingsAccentRed.opacity(0.22)
+            (0.34, 0.30)
         case .hidden:
-            .clear
+            (0, 0)
         }
     }
 
@@ -314,18 +444,22 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private func handlePhaseChange(_ phase: FloatingBarPhase) {
         switch phase {
         case .preparing:
-            recordingPeakWidth = TF.barHeight
+            recordingPeakWidth = floatingBarRecordingBaseWidth
             processingStartDate = nil
             doneStartDate = nil
             breathe = false
-            withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
-                breathe = true
+            if effectsEnabled {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    breathe = true
+                }
             }
         case .recording:
-            recordingPeakWidth = TF.barHeight
+            recordingPeakWidth = floatingBarRecordingBaseWidth
             breathe = false
-            withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
-                breathe = true
+            if effectsEnabled {
+                withAnimation(.easeInOut(duration: 2.0).repeatForever(autoreverses: true)) {
+                    breathe = true
+                }
             }
         case .processing:
             processingStartDate = Date()
@@ -335,7 +469,9 @@ struct FloatingBarView<S: FloatingBarState>: View {
             doneStartDate = Date()
             breathe = false
             doneGlow = true
-            withAnimation(.easeOut(duration: 1.0)) { doneGlow = false }
+            if effectsEnabled {
+                withAnimation(.easeOut(duration: 1.0)) { doneGlow = false }
+            }
         case .error:
             breathe = false
             doneGlow = false
@@ -358,17 +494,21 @@ struct FloatingBarView<S: FloatingBarState>: View {
     private var transcriptPopup: some View {
         Text(state.transcriptionText)
             .font(.system(size: 14, weight: .medium))
-            .foregroundStyle(.white)
+            .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(12)
             .frame(width: TF.barWidth)
-            .background(
-                RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
-                    .fill(Color(white: 0.08, opacity: 0.78))
-            )
             .clipShape(RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous))
-            .shadow(color: Color.black.opacity(0.3), radius: 8, y: -2)
+            .floatingGlass(
+                tint: Color.white.opacity(0.04),
+                in: RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: TF.transcriptPopupCorner, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.22), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.16), radius: 12, y: -2)
     }
 }
 
@@ -449,6 +589,73 @@ struct RecordingDot: View {
             withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true).delay(0.15)) {
                 innerPulse = true
             }
+        }
+    }
+}
+
+// MARK: - Liquid Recording Indicator
+
+/// Compact glass control that combines a live mic dot with a small waveform.
+struct LiquidRecordingIndicator: View {
+
+    let meter: AudioLevelMeter
+
+    var body: some View {
+        HStack(spacing: 6) {
+            RecordingDot(meter: meter)
+                .frame(width: 20, height: 20)
+
+            LiquidMeterBars(meter: meter)
+                .frame(width: 24, height: 24)
+        }
+        .padding(.horizontal, 8)
+        .frame(width: 62, height: 34)
+        .clipShape(Capsule())
+        .floatingGlass(tint: TF.recording.opacity(0.12), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.white.opacity(0.18), lineWidth: 1)
+        }
+    }
+}
+
+struct LiquidMeterBars: View {
+
+    let meter: AudioLevelMeter
+    private let phases: [Double] = [0, 0.65, 1.35]
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let level = CGFloat(max(0.08, min(1.0, meter.current)))
+
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<3, id: \.self) { index in
+                    let wave = CGFloat(sin(time * 5.2 + phases[index] * .pi) * 0.5 + 0.5)
+                    let height = 6 + wave * 12 * level
+                    RoundedRectangle(cornerRadius: 2, style: .continuous)
+                        .fill(.primary.opacity(0.45 + wave * 0.35))
+                        .frame(width: 3.5, height: height)
+                }
+            }
+        }
+    }
+}
+
+struct StaticRecordingIndicator: View {
+
+    var body: some View {
+        ZStack {
+            Image(systemName: "mic.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(.primary)
+        }
+        .frame(width: 34, height: 34)
+        .clipShape(Circle())
+        .floatingGlass(tint: nil, in: Circle())
+        .overlay {
+            Circle()
+                .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
         }
     }
 }
@@ -660,17 +867,21 @@ struct AudioRipple: View {
     @State private var levelTimeline = LevelTimeline()
 
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let time = timeline.date.timeIntervalSinceReferenceDate
-            Canvas { context, size in
-                switch style {
-                case "classic": drawClassicWaves(context: &context, size: size, time: time)
-                case "dual": drawDualSpine(context: &context, size: size, time: time)
-                default: drawTimeline(context: &context, size: size, time: time)
+        if style == "off" {
+            EmptyView()
+        } else {
+            TimelineView(.animation) { timeline in
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                Canvas { context, size in
+                    switch style {
+                    case "classic": drawClassicWaves(context: &context, size: size, time: time)
+                    case "dual": drawDualSpine(context: &context, size: size, time: time)
+                    default: drawTimeline(context: &context, size: size, time: time)
+                    }
                 }
             }
+            .drawingGroup()
         }
-        .drawingGroup()
     }
 
     // MARK: - Classic Waves (stroke lines only)
@@ -940,5 +1151,18 @@ final class HoverTrackingNSView: NSView {
     override func mouseExited(with event: NSEvent) {
         enterWorkItem?.cancel()
         onHoverChanged?(false)
+    }
+}
+
+// MARK: - Liquid Glass Compatibility
+
+private extension View {
+    @ViewBuilder
+    func floatingGlass<S: Shape>(tint: Color?, in shape: S) -> some View {
+        if #available(macOS 26.0, *) {
+            glassEffect(.regular.tint(tint), in: shape)
+        } else {
+            background(.ultraThinMaterial, in: shape)
+        }
     }
 }

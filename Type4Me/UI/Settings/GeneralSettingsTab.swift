@@ -291,16 +291,17 @@ struct GeneralSettingsTab: View, SettingsCardHelpers {
 
     private var visualStyleRow: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(L("录音动效", "Visual Style").uppercased())
+            Text(L("录音特效", "Recording Effects").uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(0.8)
                 .foregroundStyle(TF.settingsTextTertiary)
             settingsSegmentedPicker(
                 selection: $visualStyle,
                 options: [
+                    ("off", L("关闭", "Off")),
+                    ("timeline", L("电子", "Electronic")),
                     ("classic", L("线条", "Lines")),
-                    ("dual", L("粒子云", "Blocks")),
-                    ("timeline", L("电平", "Minimal")),
+                    ("dual", L("粒子云", "Particles")),
                 ]
             )
         }
